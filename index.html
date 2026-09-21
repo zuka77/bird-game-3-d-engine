@@ -227,6 +227,15 @@ canvas{max-width:100%;max-height:100%;}
   #enhancedBar{bottom:6px;}
 }
 
+
+/* ==================== GIZMO / TIMELINE UI ==================== */
+#gizmoStatus{font-size:9px;color:#9ba6b6;margin-top:5px}
+#gizmoLayer{position:absolute;inset:0;z-index:7;pointer-events:none}
+#gizmoLayer canvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+#timelineBox{margin-top:7px;padding:7px;border-radius:8px;background:#0e141c;border:1px solid #2b3544}
+#timelineBox input[type=range]{padding:0;height:20px}
+#timelineTime{font-size:9px;color:#b9c3d0;text-align:center;margin:3px 0}
+.gizmoBtnOn{background:#35d477!important;color:#07130c!important}
 </style>
 </head>
 
@@ -286,6 +295,7 @@ canvas{max-width:100%;max-height:100%;}
   </aside>
 
   <main id="viewport">
+    <div id="gizmoLayer" aria-hidden="true"></div>
     <div id="viewBadge" class="badge">3D VIEW</div>
     <div id="modeBadge" class="badge">🎥 CAMERA</div>
     <div id="statusBadge" class="badge">0 objects</div>
@@ -1639,14 +1649,39 @@ function keyDown(e){
   }
 }
 
+/* Gizmo pointer interception layer: preserves the original touch controls. */
+const _pointerDownBase=pointerDown;
+const _pointerMoveBase=pointerMove;
+const _pointerUpBase=pointerUp;
+pointerDown=function(e){
+  const giz=pickGizmo(e.clientX,e.clientY);
+  if(giz){
+    renderer.domElement.setPointerCapture?.(e.pointerId);
+    gizmoDragPointerId=e.pointerId;
+    beginGizmoDrag(e,giz);
+    return;
+  }
+  _pointerDownBase(e);
+};
+pointerMove=function(e){
+  if(gizmoDrag && e.pointerId===gizmoDragPointerId){moveGizmo(e);return;}
+  _pointerMoveBase(e);
+};
+pointerUp=function(e){
+  if(gizmoDrag && e.pointerId===gizmoDragPointerId){endGizmoDrag();gizmoDragPointerId=null;return;}
+  _pointerUpBase(e);
+};
+let gizmoDragPointerId=null;
+
 /* ------------------------- ANIMATION ------------------------- */
 
 function animate(){
   requestAnimationFrame(animate);
 
   updateCamera();
+  updateGizmo();
 
-  if(playing){
+  if(playing || timelinePlaying){
     updatePlayAnimation();
   }
 
@@ -1670,6 +1705,145 @@ function updatePlayAnimation(){
       o.position.y += Math.sin(performance.now()*.002+index)*.0008;
     }
   });
+}
+
+/* ========================= MOBILE GIZMO ========================= */
+let gizmoEnabled=false;
+let gizmoRoot=null;
+let gizmoParts=[];
+let gizmoDrag=null;
+
+function initGizmo(){
+  if(gizmoRoot) return;
+  gizmoRoot=new THREE.Group();
+  gizmoRoot.name="Editor Gizmo";
+  gizmoRoot.userData.gizmo=true;
+  scene.add(gizmoRoot);
+
+  const axes=[
+    {axis:new THREE.Vector3(1,0,0),color:0xff4b55,label:"X"},
+    {axis:new THREE.Vector3(0,1,0),color:0x55e27d,label:"Y"},
+    {axis:new THREE.Vector3(0,0,1),color:0x4d8cff,label:"Z"}
+  ];
+  axes.forEach(a=>{
+    const arrow=new THREE.ArrowHelper(a.axis,new THREE.Vector3(),1.15,a.color,.22,.11);
+    arrow.userData.gizmo=true;
+    arrow.userData.gizmoAxis=a.axis.clone();
+    arrow.userData.gizmoLabel=a.label;
+    gizmoRoot.add(arrow);
+    gizmoParts.push(arrow);
+  });
+  const center=new THREE.Mesh(
+    new THREE.SphereGeometry(.13,16,12),
+    new THREE.MeshBasicMaterial({color:0xffffff,depthTest:false})
+  );
+  center.userData.gizmo=true;
+  center.userData.gizmoCenter=true;
+  gizmoRoot.add(center);
+  gizmoParts.push(center);
+  gizmoRoot.visible=false;
+}
+
+function setGizmoEnabled(on){
+  gizmoEnabled=!!on;
+  initGizmo();
+  gizmoRoot.visible=gizmoEnabled && !!selected;
+  const b=$("gizmoBtn");
+  if(b){b.textContent=gizmoEnabled?"🎛 Gizmo ON":"🎛 Gizmo OFF";b.classList.toggle("gizmoBtnOn",gizmoEnabled);}
+  const st=$("gizmoStatus");
+  if(st)st.textContent=!selected?"Select an object first.":gizmoEnabled?"Drag X / Y / Z arrows to move precisely.":"Gizmo is off.";
+  updateGizmo();
+}
+
+function updateGizmo(){
+  if(!gizmoRoot) return;
+  if(!gizmoEnabled || !selected || selected.userData.locked){gizmoRoot.visible=false;return;}
+  gizmoRoot.visible=true;
+  const world=new THREE.Vector3();
+  selected.getWorldPosition(world);
+  gizmoRoot.position.copy(world);
+  const size=Math.max(.65,Math.min(2.2,targetDistance*.11));
+  gizmoParts.forEach(p=>{ if(p.isArrowHelper)p.setLength(size,.22,.11); });
+  gizmoRoot.quaternion.identity();
+}
+
+function pickGizmo(clientX,clientY){
+  if(!gizmoEnabled || !gizmoRoot?.visible)return null;
+  const r=renderer.domElement.getBoundingClientRect();
+  const ndc={x:((clientX-r.left)/r.width)*2-1,y:-((clientY-r.top)/r.height)*2+1};
+  const rc=new THREE.Raycaster();rc.setFromCamera(ndc,camera);
+  const hits=rc.intersectObjects(gizmoParts,true);
+  return hits[0]?.object||null;
+}
+
+function beginGizmoDrag(e,part){
+  if(!selected || selected.userData.locked)return false;
+  const axis=part.userData.gizmoAxis?.clone();
+  if(!axis)return false;
+  const startWorld=new THREE.Vector3();selected.getWorldPosition(startWorld);
+  const p0=startWorld.clone().project(camera);
+  const p1=startWorld.clone().add(axis).project(camera);
+  const r=renderer.domElement.getBoundingClientRect();
+  const sx=(p1.x-p0.x)*r.width/2;
+  const sy=-(p1.y-p0.y)*r.height/2;
+  const len=Math.hypot(sx,sy);
+  gizmoDrag={axis,startWorld,startX:e.clientX,startY:e.clientY,screenAxisX:sx/(len||1),screenAxisY:sy/(len||1),pixelsPerWorld:Math.max(20,len)};
+  return true;
+}
+
+function moveGizmo(e){
+  if(!gizmoDrag || !selected)return;
+  const dx=e.clientX-gizmoDrag.startX,dy=e.clientY-gizmoDrag.startY;
+  const amount=(dx*gizmoDrag.screenAxisX+dy*gizmoDrag.screenAxisY)/gizmoDrag.pixelsPerWorld;
+  const world=gizmoDrag.startWorld.clone().addScaledVector(gizmoDrag.axis,amount);
+  if(selected.parent && selected.parent!==scene){
+    selected.position.copy(selected.parent.worldToLocal(world));
+  }else selected.position.copy(world);
+  if(snapEnabled)snapObject(selected);
+  updateInspector();
+  updateGizmo();
+}
+
+function endGizmoDrag(){
+  if(!gizmoDrag)return;
+  gizmoDrag=null;
+  saveHistory();
+}
+
+/* ========================= TIMELINE ========================= */
+let timelinePlaying=false;
+const TIMELINE_LENGTH=10;
+function setAnimationTime(t){
+  animationTime=clamp(Number(t)||0,0,TIMELINE_LENGTH);
+  const r=$("timelineRange"),lab=$("timelineTime");
+  if(r)r.value=animationTime;
+  if(lab)lab.textContent=animationTime.toFixed(1)+"s / "+TIMELINE_LENGTH.toFixed(1)+"s";
+  if(selected)applyKeyframesAtTime(selected,animationTime);
+}
+function addTimelineKey(){
+  if(!selected){toastMsg("Select an object first");return;}
+  addKeyframe();
+  setAnimationTime(animationTime);
+}
+function applyKeyframesAtTime(obj,time){
+  const relevant=keyframes.filter(k=>k.object===obj.uuid).sort((a,b)=>a.time-b.time);
+  if(!relevant.length)return;
+  if(relevant.length===1){obj.position.fromArray(relevant[0].position);obj.rotation.fromArray(relevant[0].rotation);obj.scale.fromArray(relevant[0].scale);return;}
+  let a=relevant[0],b=relevant[relevant.length-1];
+  if(time<=relevant[0].time){a=b=relevant[0];}
+  else if(time>=relevant[relevant.length-1].time){a=b=relevant[relevant.length-1];}
+  else for(let i=0;i<relevant.length-1;i++)if(time>=relevant[i].time&&time<=relevant[i+1].time){a=relevant[i];b=relevant[i+1];break;}
+  if(a===b){obj.position.fromArray(a.position);obj.rotation.fromArray(a.rotation);obj.scale.fromArray(a.scale);return;}
+  const t=clamp((time-a.time)/Math.max(.0001,b.time-a.time),0,1);
+  obj.position.fromArray(a.position).lerp(new THREE.Vector3().fromArray(b.position),t);
+  obj.scale.fromArray(a.scale).lerp(new THREE.Vector3().fromArray(b.scale),t);
+  const ra=new THREE.Euler().fromArray(a.rotation),rb=new THREE.Euler().fromArray(b.rotation);
+  obj.rotation.set(THREE.MathUtils.lerp(ra.x,rb.x,t),THREE.MathUtils.lerp(ra.y,rb.y,t),THREE.MathUtils.lerp(ra.z,rb.z,t));
+}
+function toggleTimeline(){
+  timelinePlaying=!timelinePlaying;
+  const b=$("timelinePlayBtn");if(b)b.textContent=timelinePlaying?"⏸ Timeline":"▶ Timeline";
+  if(timelinePlaying){playing=true;animationTime=0;setAnimationTime(0);}
 }
 
 /* ------------------------- RESIZE ------------------------- */
@@ -1912,6 +2086,11 @@ function updateHierarchy(){
     el.onclick=()=>selectObject(o);
     box.appendChild(el);
   });
+  if(selected){
+    const hint=document.createElement("div");hint.style.marginTop="6px";hint.style.color="#8e99aa";
+    hint.textContent="Parent = attaches selected object to the first other object. Unparent returns it to scene.";
+    box.appendChild(hint);
+  }
 }
 
 function parentSelected(){
@@ -2121,7 +2300,9 @@ function bindEnhancedUI(){
   $("parentBtn").onclick=parentSelected;
   $("unparentBtn").onclick=unparentSelected;
   $("recordBtn").onclick=()=>{
+    if(!selected){toastMsg("Select an object first");return;}
     recordingKeys=!recordingKeys;
+    if(recordingKeys){ addKeyframe(); }
     $("recordBtn").textContent=recordingKeys?"⏹ Recording":"⏺ Record";
     $("recordBtn").classList.toggle("active",recordingKeys);
   };
@@ -2134,7 +2315,19 @@ function bindEnhancedUI(){
   $("roughRange").oninput=e=>setMaterialProperty("roughness",e.target.value);
   $("opacityRange").oninput=e=>setMaterialProperty("opacity",e.target.value);
 
+  const gizmoButton=$("gizmoBtn");
+  if(gizmoButton)gizmoButton.onclick=()=>setGizmoEnabled(!gizmoEnabled);
+  const gizmoCenter=$("gizmoCenterBtn");
+  if(gizmoCenter)gizmoCenter.onclick=()=>{if(selected){updateGizmo();toastMsg("Gizmo centered");}};
+  const timelineRange=$("timelineRange");
+  if(timelineRange)timelineRange.oninput=e=>setAnimationTime(e.target.value);
+  const addTimelineKeyBtn=$("addTimelineKeyBtn");
+  if(addTimelineKeyBtn)addTimelineKeyBtn.onclick=addTimelineKey;
+  const timelinePlayBtn=$("timelinePlayBtn");
+  if(timelinePlayBtn)timelinePlayBtn.onclick=toggleTimeline;
   updateHierarchy();
+  initGizmo();
+  setAnimationTime(animationTime);
 }
 
 /* Keep hierarchy synchronized whenever selection/list changes. */
@@ -2142,6 +2335,7 @@ const _oldSelectObject=selectObject;
 selectObject=function(obj){
   _oldSelectObject(obj);
   updateHierarchy();
+  updateGizmo();
   if(obj?.material){
     const m=Array.isArray(obj.material)?obj.material[0]:obj.material;
     if(m){
@@ -2476,6 +2670,19 @@ window.addEventListener("load",()=>{
     physicsStep(dt);updateParticles(dt);
   };
 
+  let _recordAccum=0;
+  const _updateRecord=updatePlayAnimation;
+  updatePlayAnimation=function(){
+    _updateRecord();
+    if(recordingKeys && selected){
+      const now=performance.now();
+      const dt=Math.min(.1,(now-(pro._recordLast||now))/1000);
+      pro._recordLast=now;
+      _recordAccum+=dt;
+      if(_recordAccum>=0.5){_recordAccum=0;addKeyframe();}
+    }
+  };
+
 
   /* ---------- richer object serialization ---------- */
   const _capturePro = capture;
@@ -2552,6 +2759,18 @@ window.addEventListener("load",()=>{
     const d=projectData();d.thumbnail='runtime-generated';d.notes=pro.sceneNotes;
     const blob=new Blob([JSON.stringify(d,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='bird-engine-complete-project.json';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),500);safeToast('Complete project exported');
   };
+
+
+  /* ---------- gizmo/hierarchy/animation persistence ---------- */
+  const _projectDataFinal=projectData;
+  projectData=function(){
+    const d=_projectDataFinal();
+    d.editorAnimation={keyframes:keyframes.map(k=>({...k})),time:animationTime};
+    d.hierarchy=objects.map(o=>({name:o.name,parent:o.parent&&o.parent!==scene?o.parent.name:null}));
+    return d;
+  };
+  const _loadProjectFinal=loadProject;
+  loadProject=function(){ _loadProjectFinal(); };
 
   /* ---------- init ---------- */
   window.addEventListener('load',()=>setTimeout(addProSection,120));
