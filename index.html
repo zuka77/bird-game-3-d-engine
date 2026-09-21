@@ -1,1 +1,889 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>Bird 3D Engine</title>
+
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#0d1016;color:#fff;font-family:Arial,sans-serif}
+button,input{font:inherit}
+button{border:0;color:#fff;background:#252b36;border-radius:10px;padding:9px 11px;font-weight:700;white-space:nowrap}
+button:active{transform:scale(.97)}
+button.active{background:#35d477;color:#07120b}
+button.danger{background:#a9343d}
+button:disabled{opacity:.4}
+#app{height:100%;display:flex;flex-direction:column}
+#top{height:58px;display:flex;align-items:center;gap:8px;padding:7px 9px;background:#171b23;border-bottom:1px solid #303744;z-index:20}
+.logo{font-weight:900;font-size:15px;white-space:nowrap}
+#toolbar{display:flex;gap:6px;overflow:auto;scrollbar-width:none}
+#toolbar::-webkit-scrollbar{display:none}
+#layout{flex:1;min-height:0;display:grid;grid-template-columns:155px 1fr 175px}
+.panel{background:#171b23;overflow:auto;padding:12px}
+.left{border-right:1px solid #303744}.right{border-left:1px solid #303744}
+.title{font-size:10px;font-weight:900;letter-spacing:1.3px;color:#87909f;margin-bottom:10px}
+#sceneList{display:flex;flex-direction:column;gap:5px}
+.sceneItem{padding:9px;border-radius:8px;background:#252b36;font-size:11px;cursor:pointer}
+.sceneItem.selected{background:#35d477;color:#06130a}
+.row{display:flex;gap:5px;margin-bottom:7px}
+.row>*{flex:1}
+.small{font-size:10px;color:#8992a1}
+.field{width:100%;padding:8px;background:#0f131a;border:1px solid #303744;color:#fff;border-radius:7px;outline:none}
+#viewport{position:relative;min-width:0;min-height:0;overflow:hidden;background:#080a0e}
+canvas{display:block;width:100%;height:100%;touch-action:none}
+.badge{position:absolute;z-index:5;top:10px;padding:7px 9px;border-radius:8px;background:#171b23dd;font-size:10px;pointer-events:none}
+#viewBadge{left:10px}#modeBadge{right:10px}
+#hint{position:absolute;z-index:5;bottom:10px;left:50%;transform:translateX(-50%);background:#171b23dd;padding:8px 11px;border-radius:9px;font-size:9px;white-space:nowrap;pointer-events:none}
+#playOverlay{position:absolute;inset:0;background:#000;display:none;z-index:15}
+#playOverlay canvas{width:100%;height:100%}
+#playBar{position:absolute;z-index:20;top:10px;left:50%;transform:translateX(-50%);display:flex;gap:5px}
+#toast{position:absolute;z-index:50;left:50%;bottom:55px;transform:translateX(-50%);background:#222a35;padding:9px 13px;border-radius:9px;font-size:11px;display:none}
+@media(max-width:800px){
+#top{height:56px}.logo{font-size:12px}
+#layout{grid-template-columns:82px 1fr 105px}
+.panel{padding:7px}
+button{font-size:10px;padding:8px 9px}
+.title{font-size:8px}.sceneItem{font-size:8px;padding:8px 5px}
+}
+</style>
+</head>
+
+<body>
+<div id="app">
+
+<header id="top">
+<div class="logo">🐦 BIRD ENGINE</div>
+<div id="toolbar">
+<button id="cameraBtn" class="active">🎥 Camera</button>
+<button id="moveBtn">✋ Move</button>
+<button id="rotateBtn">🔄 Rotate</button>
+<button id="scaleBtn">📏 Scale</button>
+<button id="cubeBtn">＋ Cube</button>
+<button id="sphereBtn">＋ Sphere</button>
+<button id="cylinderBtn">＋ Cylinder</button>
+<button id="coneBtn">＋ Cone</button>
+<button id="planeBtn">＋ Plane</button>
+<button id="capsuleBtn">＋ Capsule</button>
+<button id="duplicateBtn">📋 Duplicate</button>
+<button id="deleteBtn" class="danger">🗑 Delete</button>
+<button id="playBtn">▶ Play</button>
+<button id="saveBtn">💾 Save</button>
+<button id="loadBtn">📂 Load</button>
+<button id="fullscreenBtn">⛶ Fullscreen</button>
+</div>
+</header>
+
+<div id="layout">
+
+<aside class="panel left">
+<div class="title">SCENE</div>
+<div id="sceneList"></div>
+</aside>
+
+<main id="viewport">
+<div id="viewBadge" class="badge">3D VIEW</div>
+<div id="modeBadge" class="badge">🎥 CAMERA</div>
+<div id="hint">👆 Drag camera • 🤏 Pinch zoom</div>
+<div id="toast"></div>
+
+<div id="playOverlay">
+<div id="playBar">
+<button id="stopBtn" class="danger">⏹ Stop</button>
+<button id="playFullBtn">⛶ Fullscreen</button>
+</div>
+</div>
+</main>
+
+<aside class="panel right">
+<div class="title">OBJECT</div>
+<div id="inspector">
+<div class="small">Select an object</div>
+</div>
+</aside>
+
+</div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+
+<script>
+/* =========================================================
+   BIRD 3D ENGINE
+   Single-file mobile-first 3D editor
+   ========================================================= */
+
+const viewport=document.getElementById("viewport");
+const sceneList=document.getElementById("sceneList");
+const inspector=document.getElementById("inspector");
+const modeBadge=document.getElementById("modeBadge");
+const toast=document.getElementById("toast");
+
+let scene,camera,renderer,raycaster;
+let objects=[];
+let selected=null;
+let mode="camera";
+let isPlaying=false;
+
+let cameraYaw=.65;
+let cameraPitch=.45;
+let cameraDistance=8;
+let targetYaw=.65;
+let targetPitch=.45;
+let targetDistance=8;
+
+let pointers=new Map();
+let lastX=0,lastY=0;
+let pinchStart=0,pinchDistanceStart=8;
+
+let history=[];
+let historyIndex=-1;
+let historyLock=false;
+
+let dragStart=null;
+let hoverObject=null;
+
+
+/* ---------------- ENGINE ---------------- */
+
+function init(){
+  scene=new THREE.Scene();
+  scene.background=new THREE.Color(0x10151d);
+
+  camera=new THREE.PerspectiveCamera(
+    60,
+    viewport.clientWidth/viewport.clientHeight,
+    .01,
+    5000
+  );
+
+  renderer=new THREE.WebGLRenderer({antialias:true});
+  renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+  renderer.setSize(viewport.clientWidth,viewport.clientHeight);
+  viewport.appendChild(renderer.domElement);
+
+  raycaster=new THREE.Raycaster();
+
+  const hemi=new THREE.HemisphereLight(0xffffff,0x304030,2);
+  scene.add(hemi);
+
+  const sun=new THREE.DirectionalLight(0xffffff,2.2);
+  sun.position.set(8,12,6);
+  scene.add(sun);
+
+  const ground=new THREE.Mesh(
+    new THREE.PlaneGeometry(100,100),
+    new THREE.MeshStandardMaterial({color:0x31513b,roughness:1})
+  );
+  ground.rotation.x=-Math.PI/2;
+  ground.name="Ground";
+  ground.userData.engine=true;
+  ground.userData.locked=true;
+  scene.add(ground);
+
+  addGrid();
+
+  createCube(false);
+  selectObject(objects[0]);
+
+  bindEvents();
+  updateModeButtons();
+  updateCamera();
+  saveHistory();
+  animate();
+}
+
+function addGrid(){
+  const grid=new THREE.GridHelper(100,100,0x506070,0x29313c);
+  grid.position.y=.002;
+  grid.name="Editor Grid";
+  grid.userData.helper=true;
+  scene.add(grid);
+}
+
+
+/* ---------------- OBJECT CREATION ---------------- */
+
+function material(color){
+  return new THREE.MeshStandardMaterial({
+    color,
+    roughness:.72,
+    metalness:.05
+  });
+}
+
+function addObject(mesh,type,select=true){
+  mesh.userData.engine=true;
+  mesh.userData.type=type;
+  mesh.userData.locked=false;
+  mesh.userData.hidden=false;
+  mesh.name=uniqueName(type);
+
+  scene.add(mesh);
+  objects.push(mesh);
+  addSceneItem(mesh);
+
+  if(select) selectObject(mesh);
+  saveHistory();
+}
+
+function uniqueName(type){
+  let n=1;
+  while(objects.some(o=>o.name===type+" "+n)) n++;
+  return type+" "+n;
+}
+
+function createCube(select=true){
+  const m=new THREE.Mesh(
+    new THREE.BoxGeometry(1.5,1.5,1.5),
+    material(0x28aef0)
+  );
+  m.position.set(randomPos(),.75,randomPos());
+  addObject(m,"Cube",select);
+}
+
+function createSphere(select=true){
+  const m=new THREE.Mesh(
+    new THREE.SphereGeometry(.9,32,20),
+    material(0xffb52e)
+  );
+  m.position.set(randomPos(),.9,randomPos());
+  addObject(m,"Sphere",select);
+}
+
+function createCylinder(select=true){
+  const m=new THREE.Mesh(
+    new THREE.CylinderGeometry(.8,.8,1.6,32),
+    material(0x9b6cff)
+  );
+  m.position.set(randomPos(),.8,randomPos());
+  addObject(m,"Cylinder",select);
+}
+
+function createCone(select=true){
+  const m=new THREE.Mesh(
+    new THREE.ConeGeometry(.9,1.8,32),
+    material(0xff5f75)
+  );
+  m.position.set(randomPos(),.9,randomPos());
+  addObject(m,"Cone",select);
+}
+
+function createPlane(select=true){
+  const m=new THREE.Mesh(
+    new THREE.PlaneGeometry(2,2),
+    material(0x45d18a)
+  );
+  m.rotation.x=-Math.PI/2;
+  m.position.set(randomPos(),.02,randomPos());
+  addObject(m,"Plane",select);
+}
+
+function createCapsule(select=true){
+  const m=new THREE.Mesh(
+    new THREE.CapsuleGeometry(.55,1.2,8,20),
+    material(0x40d6cf)
+  );
+  m.position.set(randomPos(),1,randomPos());
+  addObject(m,"Capsule",select);
+}
+
+function randomPos(){
+  return Math.random()*4-2;
+}
+
+
+/* ---------------- SCENE LIST ---------------- */
+
+function addSceneItem(obj){
+  const el=document.createElement("div");
+  el.className="sceneItem";
+  el.textContent=obj.name;
+  el.onclick=()=>selectObject(obj);
+  obj.userData.listItem=el;
+  sceneList.appendChild(el);
+}
+
+function refreshSceneList(){
+  sceneList.innerHTML="";
+  objects.forEach(addSceneItem);
+  if(selected?.userData.listItem)
+    selected.userData.listItem.classList.add("selected");
+}
+
+
+/* ---------------- SELECTION ---------------- */
+
+function selectObject(obj){
+  selected=obj;
+
+  document.querySelectorAll(".sceneItem").forEach(e=>e.classList.remove("selected"));
+
+  if(obj && obj.userData.listItem){
+    obj.userData.listItem.classList.add("selected");
+  }
+
+  updateInspector();
+}
+
+function updateInspector(){
+  if(!selected){
+    inspector.innerHTML='<div class="small">Select an object</div>';
+    return;
+  }
+
+  inspector.innerHTML=`
+    <div style="font-weight:900;margin-bottom:9px">${escapeHtml(selected.name)}</div>
+
+    <div class="small">Name</div>
+    <input id="nameField" class="field" value="${escapeAttr(selected.name)}">
+
+    <div class="small" style="margin-top:9px">Color</div>
+    <input id="colorField" class="field" type="color"
+      value="#${selected.material?.color?.getHexString?.()||"ffffff"}">
+
+    <div class="row" style="margin-top:9px">
+      <button id="hideBtn">${selected.visible?"👁 Hide":"👁 Show"}</button>
+      <button id="lockBtn">${selected.userData.locked?"🔒 Locked":"🔓 Unlocked"}</button>
+    </div>
+
+    <div class="small">Position</div>
+    <div class="small">
+      X ${selected.position.x.toFixed(2)}
+      <br>Y ${selected.position.y.toFixed(2)}
+      <br>Z ${selected.position.z.toFixed(2)}
+    </div>
+
+    <div class="small" style="margin-top:9px">Scale</div>
+    <div class="small">${selected.scale.x.toFixed(2)}</div>
+
+    <div class="small" style="margin-top:9px">Rotation</div>
+    <div class="small">
+      X ${THREE.MathUtils.radToDeg(selected.rotation.x).toFixed(0)}°
+      <br>Y ${THREE.MathUtils.radToDeg(selected.rotation.y).toFixed(0)}°
+      <br>Z ${THREE.MathUtils.radToDeg(selected.rotation.z).toFixed(0)}°
+    </div>
+  `;
+
+  document.getElementById("nameField").onchange=e=>{
+    selected.name=e.target.value.trim()||selected.name;
+    refreshSceneList();
+    saveHistory();
+    updateInspector();
+  };
+
+  document.getElementById("colorField").oninput=e=>{
+    if(selected.material?.color){
+      selected.material.color.set(e.target.value);
+      saveHistory(false);
+    }
+  };
+
+  document.getElementById("hideBtn").onclick=()=>{
+    selected.visible=!selected.visible;
+    updateInspector();
+    saveHistory();
+  };
+
+  document.getElementById("lockBtn").onclick=()=>{
+    selected.userData.locked=!selected.userData.locked;
+    updateInspector();
+    saveHistory();
+  };
+}
+
+function escapeHtml(s){
+  return s.replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[m]));
+}
+function escapeAttr(s){return escapeHtml(s)}
+
+
+/* ---------------- MODES ---------------- */
+
+function setMode(m){
+  mode=m;
+  updateModeButtons();
+
+  const labels={
+    camera:"🎥 CAMERA",
+    move:"✋ MOVE",
+    rotate:"🔄 ROTATE",
+    scale:"📏 SCALE"
+  };
+  modeBadge.textContent=labels[m];
+}
+
+function updateModeButtons(){
+  const ids=["cameraBtn","moveBtn","rotateBtn","scaleBtn"];
+  ids.forEach(id=>document.getElementById(id).classList.remove("active"));
+  const map={camera:"cameraBtn",move:"moveBtn",rotate:"rotateBtn",scale:"scaleBtn"};
+  document.getElementById(map[mode]).classList.add("active");
+}
+
+
+/* ---------------- POINTER CONTROLS ---------------- */
+
+function bindEvents(){
+
+  const c=renderer.domElement;
+
+  c.addEventListener("pointerdown",onPointerDown);
+  c.addEventListener("pointermove",onPointerMove);
+  c.addEventListener("pointerup",onPointerUp);
+  c.addEventListener("pointercancel",onPointerUp);
+  c.addEventListener("wheel",onWheel,{passive:false});
+
+  window.addEventListener("resize",resize);
+
+  document.getElementById("cameraBtn").onclick=()=>setMode("camera");
+  document.getElementById("moveBtn").onclick=()=>setMode("move");
+  document.getElementById("rotateBtn").onclick=()=>setMode("rotate");
+  document.getElementById("scaleBtn").onclick=()=>setMode("scale");
+
+  document.getElementById("cubeBtn").onclick=()=>createCube();
+  document.getElementById("sphereBtn").onclick=()=>createSphere();
+  document.getElementById("cylinderBtn").onclick=()=>createCylinder();
+  document.getElementById("coneBtn").onclick=()=>createCone();
+  document.getElementById("planeBtn").onclick=()=>createPlane();
+  document.getElementById("capsuleBtn").onclick=()=>createCapsule();
+
+  document.getElementById("duplicateBtn").onclick=duplicateSelected;
+  document.getElementById("deleteBtn").onclick=deleteSelected;
+  document.getElementById("playBtn").onclick=togglePlay;
+  document.getElementById("saveBtn").onclick=saveToFile;
+  document.getElementById("loadBtn").onclick=loadFromFile;
+  document.getElementById("fullscreenBtn").onclick=fullscreen;
+
+  document.getElementById("stopBtn").onclick=stopPlay;
+  document.getElementById("playFullBtn").onclick=fullscreen;
+
+  window.addEventListener("keydown",onKey);
+}
+
+function onPointerDown(e){
+  renderer.domElement.setPointerCapture(e.pointerId);
+
+  pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
+
+  lastX=e.clientX;
+  lastY=e.clientY;
+
+  if(pointers.size===2){
+    const p=[...pointers.values()];
+    pinchStart=distance(p[0],p[1]);
+    pinchDistanceStart=targetDistance;
+    return;
+  }
+
+  if(mode!=="camera"){
+    const hit=pick(e.clientX,e.clientY);
+    if(hit && hit.userData.engine && !hit.userData.helper && !hit.userData.locked){
+      selectObject(hit);
+      dragStart={
+        x:e.clientX,y:e.clientY,
+        px:hit.position.x,py:hit.position.y,pz:hit.position.z,
+        rx:hit.rotation.x,ry:hit.rotation.y,rz:hit.rotation.z,
+        scale:hit.scale.x
+      };
+    }else{
+      dragStart=null;
+    }
+  }else{
+    const hit=pick(e.clientX,e.clientY);
+    if(hit?.userData.engine && !hit.userData.helper) selectObject(hit);
+  }
+}
+
+function onPointerMove(e){
+  if(!pointers.has(e.pointerId))return;
+
+  pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
+
+  if(mode==="camera"){
+    if(pointers.size===2){
+      smoothPinch();
+      return;
+    }
+
+    const dx=e.clientX-lastX;
+    const dy=e.clientY-lastY;
+
+    targetYaw-=dx*.008;
+    targetPitch-=dy*.008;
+    targetPitch=Math.max(-1.54,Math.min(1.54,targetPitch));
+
+    lastX=e.clientX;
+    lastY=e.clientY;
+    return;
+  }
+
+  if(!selected || selected.userData.locked)return;
+
+  const dx=e.clientX-lastX;
+  const dy=e.clientY-lastY;
+
+  if(mode==="move"){
+    const speed=Math.max(.002,cameraDistance*.003);
+    selected.position.x+=dx*speed;
+    selected.position.y-=dy*speed;
+  }
+
+  if(mode==="rotate"){
+    /* Full free 3D rotation:
+       horizontal + vertical movement affects all three axes */
+    const s=.012;
+    selected.rotation.x+=dy*s;
+    selected.rotation.y+=dx*s;
+    selected.rotation.z+=(dx-dy)*s*.42;
+  }
+
+  if(mode==="scale"){
+    let s=selected.scale.x-dy*.01;
+    s=Math.max(.03,Math.min(100,s));
+    selected.scale.setScalar(s);
+  }
+
+  lastX=e.clientX;
+  lastY=e.clientY;
+  updateInspector();
+}
+
+function onPointerUp(e){
+  pointers.delete(e.pointerId);
+  if(pointers.size<2)pinchStart=0;
+
+  if(dragStart){
+    saveHistory();
+    dragStart=null;
+  }
+}
+
+function onWheel(e){
+  e.preventDefault();
+  targetDistance*=Math.exp(e.deltaY*.001);
+  targetDistance=Math.max(.15,Math.min(500,targetDistance));
+}
+
+function smoothPinch(){
+  const p=[...pointers.values()];
+  const d=distance(p[0],p[1]);
+  if(!pinchStart)return;
+
+  targetDistance=pinchDistanceStart*(pinchStart/d);
+  targetDistance=Math.max(.15,Math.min(500,targetDistance));
+}
+
+function distance(a,b){
+  return Math.hypot(a.x-b.x,a.y-b.y);
+}
+
+function pick(clientX,clientY){
+  const r=renderer.domElement.getBoundingClientRect();
+
+  const x=((clientX-r.left)/r.width)*2-1;
+  const y=-((clientY-r.top)/r.height)*2+1;
+
+  raycaster.setFromCamera({x,y},camera);
+
+  const hits=raycaster.intersectObjects(objects,true);
+
+  return hits.length?hits[0].object:null;
+}
+
+
+/* ---------------- CAMERA ---------------- */
+
+function updateCamera(){
+  cameraYaw+=(targetYaw-cameraYaw)*.14;
+  cameraPitch+=(targetPitch-cameraPitch)*.14;
+  cameraDistance+=(targetDistance-cameraDistance)*.16;
+
+  const h=Math.cos(cameraPitch)*cameraDistance;
+
+  camera.position.x=Math.sin(cameraYaw)*h;
+  camera.position.z=Math.cos(cameraYaw)*h;
+  camera.position.y=Math.sin(cameraPitch)*cameraDistance;
+
+  camera.lookAt(0,.7,0);
+}
+
+
+/* ---------------- OBJECT ACTIONS ---------------- */
+
+function duplicateSelected(){
+  if(!selected || selected.userData.locked)return;
+
+  const clone=selected.clone(true);
+  clone.name=uniqueName(selected.userData.type||"Object");
+  clone.position.x+=1;
+  clone.position.z+=1;
+
+  clone.userData=Object.assign({},selected.userData);
+  clone.userData.locked=false;
+  clone.userData.listItem=null;
+
+  scene.add(clone);
+  objects.push(clone);
+  addSceneItem(clone);
+  selectObject(clone);
+  saveHistory();
+}
+
+function deleteSelected(){
+  if(!selected || selected.userData.locked)return;
+
+  disposeObject(selected);
+  selected=null;
+
+  refreshSceneList();
+  updateInspector();
+  saveHistory();
+}
+
+function disposeObject(o){
+  scene.remove(o);
+  if(o.geometry)o.geometry.dispose();
+
+  if(o.material){
+    if(Array.isArray(o.material))o.material.forEach(m=>m.dispose());
+    else o.material.dispose();
+  }
+
+  objects=objects.filter(x=>x!==o);
+}
+
+
+/* ---------------- HISTORY ---------------- */
+
+function snapshot(){
+  return objects.map(o=>({
+    name:o.name,
+    type:o.userData.type,
+    position:o.position.toArray(),
+    rotation:o.rotation.toArray(),
+    scale:o.scale.toArray(),
+    color:o.material?.color?.getHex?.()??0xffffff,
+    visible:o.visible,
+    locked:!!o.userData.locked
+  }));
+}
+
+function saveHistory(show=true){
+  if(historyLock)return;
+
+  const state=JSON.stringify(snapshot());
+
+  if(historyIndex<history.length-1)
+    history=history.slice(0,historyIndex+1);
+
+  if(history[historyIndex]===state)return;
+
+  history.push(state);
+
+  if(history.length>60)history.shift();
+
+  historyIndex=history.length-1;
+
+  if(show)toastMsg("Saved state");
+}
+
+function restoreState(state){
+  historyLock=true;
+
+  objects.slice().forEach(disposeObject);
+  objects=[];
+
+  JSON.parse(state).forEach(data=>{
+    let o;
+
+    if(data.type==="Cube")o=new THREE.Mesh(new THREE.BoxGeometry(1.5,1.5,1.5),material(data.color));
+    else if(data.type==="Sphere")o=new THREE.Mesh(new THREE.SphereGeometry(.9,32,20),material(data.color));
+    else if(data.type==="Cylinder")o=new THREE.Mesh(new THREE.CylinderGeometry(.8,.8,1.6,32),material(data.color));
+    else if(data.type==="Cone")o=new THREE.Mesh(new THREE.ConeGeometry(.9,1.8,32),material(data.color));
+    else if(data.type==="Plane")o=new THREE.Mesh(new THREE.PlaneGeometry(2,2),material(data.color));
+    else if(data.type==="Capsule")o=new THREE.Mesh(new THREE.CapsuleGeometry(.55,1.2,8,20),material(data.color));
+    else return;
+
+    o.name=data.name;
+    o.position.fromArray(data.position);
+    o.rotation.fromArray(data.rotation);
+    o.scale.fromArray(data.scale);
+    o.visible=data.visible;
+    o.userData.engine=true;
+    o.userData.type=data.type;
+    o.userData.locked=data.locked;
+
+    scene.add(o);
+    objects.push(o);
+  });
+
+  refreshSceneList();
+  selectObject(objects[0]||null);
+  historyLock=false;
+}
+
+function undo(){
+  if(historyIndex<=0)return;
+  historyIndex--;
+  restoreState(history[historyIndex]);
+  toastMsg("Undo");
+}
+
+function redo(){
+  if(historyIndex>=history.length-1)return;
+  historyIndex++;
+  restoreState(history[historyIndex]);
+  toastMsg("Redo");
+}
+
+
+/* ---------------- SAVE / LOAD ---------------- */
+
+function saveToFile(){
+  const data={
+    version:1,
+    scene:snapshot()
+  };
+
+  const blob=new Blob(
+    [JSON.stringify(data,null,2)],
+    {type:"application/json"}
+  );
+
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(blob);
+  a.download="bird-engine-scene.json";
+  a.click();
+
+  setTimeout(()=>URL.revokeObjectURL(a.href),500);
+  toastMsg("Scene exported");
+}
+
+function loadFromFile(){
+  const input=document.createElement("input");
+  input.type="file";
+  input.accept=".json,application/json";
+
+  input.onchange=()=>{
+    const file=input.files[0];
+    if(!file)return;
+
+    const reader=new FileReader();
+
+    reader.onload=()=>{
+      try{
+        const data=JSON.parse(reader.result);
+
+        if(!data.scene)throw new Error();
+
+        restoreState(JSON.stringify(data.scene));
+        history=[];
+        historyIndex=-1;
+        saveHistory();
+        toastMsg("Scene loaded");
+      }catch{
+        toastMsg("Invalid scene file");
+      }
+    };
+
+    reader.readAsText(file);
+  };
+
+  input.click();
+}
+
+
+/* ---------------- PLAY MODE ---------------- */
+
+function togglePlay(){
+  if(isPlaying){
+    stopPlay();
+    return;
+  }
+
+  isPlaying=true;
+  document.getElementById("playBtn").textContent="⏹ Stop";
+  document.getElementById("playOverlay").style.display="block";
+  toastMsg("Play mode");
+}
+
+function stopPlay(){
+  isPlaying=false;
+  document.getElementById("playBtn").textContent="▶ Play";
+  document.getElementById("playOverlay").style.display="none";
+  toastMsg("Editor mode");
+}
+
+
+/* ---------------- FULLSCREEN ---------------- */
+
+async function fullscreen(){
+  try{
+    if(!document.fullscreenElement){
+      await document.documentElement.requestFullscreen();
+    }else{
+      await document.exitFullscreen();
+    }
+  }catch{
+    toastMsg("Fullscreen unavailable");
+  }
+}
+
+
+/* ---------------- KEYBOARD ---------------- */
+
+function onKey(e){
+  if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==="z"){
+    e.preventDefault();
+    e.shiftKey?redo():undo();
+  }
+
+  if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==="y"){
+    e.preventDefault();
+    redo();
+  }
+
+  if(e.key==="Delete"||e.key==="Backspace"){
+    deleteSelected();
+  }
+
+  if(e.key==="Escape"&&isPlaying){
+    stopPlay();
+  }
+}
+
+
+/* ---------------- UTILITIES ---------------- */
+
+function toastMsg(text){
+  toast.textContent=text;
+  toast.style.display="block";
+  clearTimeout(toast._timer);
+  toast._timer=setTimeout(()=>toast.style.display="none",1100);
+}
+
+function resize(){
+  const w=viewport.clientWidth;
+  const h=viewport.clientHeight;
+
+  camera.aspect=w/h;
+  camera.updateProjectionMatrix();
+  renderer.setSize(w,h);
+}
+
+function animate(){
+  requestAnimationFrame(animate);
+
+  updateCamera();
+
+  renderer.render(scene,camera);
+}
+
+
+/* ---------------- START ---------------- */
+
+init();
+</script>
+</body>
+</html>
 
