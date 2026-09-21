@@ -514,6 +514,15 @@ let dragStart = null;
 let snapEnabled = false;
 let gridVisible = true;
 let playing = false;
+let birdGameInput = {
+  moveX:0, moveY:0, lookX:0, lookY:0, up:false, down:false, boost:false
+};
+let birdGameTarget = null;
+let birdGameYaw = 0;
+let birdGamePitch = 0;
+let birdGameSpeed = 3.5;
+let birdGameControlsBound = false;
+
 
 let history = [];
 let historyIndex = -1;
@@ -1551,6 +1560,220 @@ function autoSave(){
   }
 }
 
+
+/* ------------------------- MOBILE BIRD GAME CONTROLS ------------------------- */
+
+function findBirdGameTarget(){
+  if(birdGameTarget && birdGameTarget.parent) return birdGameTarget;
+
+  const candidate =
+    objects.find(o=>o?.userData?.birdAnimation) ||
+    objects.find(o=>o?.userData?.type==="GLB") ||
+    objects.find(o=>o?.userData?.type==="Model") ||
+    importedModels?.find(o=>o?.parent);
+
+  birdGameTarget = candidate || null;
+
+  if(birdGameTarget){
+    birdGameYaw = birdGameTarget.rotation.y;
+    birdGamePitch = 0;
+  }
+  return birdGameTarget;
+}
+
+function setBirdGameAnimation(name){
+  const bird=findBirdGameTarget();
+  const controller=bird?.userData?.birdAnimation;
+  if(!controller || !controller.play) return;
+  controller.play(name, name!=="takeoff" && name!=="landing");
+}
+
+function updateBirdGame(dt){
+  if(!playing) return;
+
+  const bird=findBirdGameTarget();
+  if(!bird) return;
+
+  const input=birdGameInput;
+
+  // Horizontal steering from the left stick.
+  const turn=input.moveX;
+  birdGameYaw -= turn * 1.9 * dt;
+  bird.rotation.y = birdGameYaw;
+
+  // Forward/backward flight from the left stick.
+  const forward = -input.moveY;
+  const speed = birdGameSpeed * (input.boost ? 1.8 : 1);
+  const move = speed * forward * dt;
+
+  // Vertical flight from the dedicated up/down buttons.
+  let vertical=0;
+  if(input.up) vertical += 1;
+  if(input.down) vertical -= 1;
+
+  const maxPitch=.95;
+  birdGamePitch += (-input.moveY * .35 - birdGamePitch) * Math.min(1,dt*4);
+  birdGamePitch = Math.max(-maxPitch,Math.min(maxPitch,birdGamePitch));
+
+  const forwardDir=new THREE.Vector3(
+    Math.sin(birdGameYaw),
+    0,
+    Math.cos(birdGameYaw)
+  );
+
+  bird.position.addScaledVector(forwardDir,move);
+  bird.position.y += vertical * speed * .72 * dt;
+
+  // Keep the bird above the ground while flying.
+  if(bird.position.y < .35) bird.position.y=.35;
+
+  // Animation state: no input = glide, active forward = flap.
+  if(Math.abs(forward)>.12 || Math.abs(vertical)>.12){
+    setBirdGameAnimation("flapping");
+  }else{
+    setBirdGameAnimation("gliding");
+  }
+
+  // Right stick rotates the third-person camera around the bird.
+  if(Math.abs(input.lookX)>.03 || Math.abs(input.lookY)>.03){
+    cameraYaw -= input.lookX * 2.2 * dt;
+    cameraPitch += input.lookY * 1.5 * dt;
+    cameraPitch=Math.max(-0.35,Math.min(1.05,cameraPitch));
+  }
+
+  // Third-person camera target follows the bird.
+  targetCameraTarget.lerp(
+    new THREE.Vector3(bird.position.x,bird.position.y+.35,bird.position.z),
+    Math.min(1,dt*6)
+  );
+
+  const cameraDistanceForBird=Math.max(4.5,Math.min(12,cameraDistance));
+  const orbitYaw = birdGameYaw + cameraYaw;
+  const orbitPitch = Math.max(-0.2,Math.min(1.15,cameraPitch + .45));
+  const horizontal = Math.cos(orbitPitch) * cameraDistanceForBird;
+  const camBehind=new THREE.Vector3(
+    bird.position.x - Math.sin(orbitYaw)*horizontal,
+    bird.position.y + 1.0 + Math.sin(orbitPitch)*cameraDistanceForBird,
+    bird.position.z - Math.cos(orbitYaw)*horizontal
+  );
+  camera.position.lerp(camBehind,Math.min(1,dt*5));
+  camera.lookAt(
+    bird.position.x,
+    bird.position.y+.25,
+    bird.position.z
+  );
+}
+
+function setupBirdGameControls(){
+  if(birdGameControlsBound) return;
+  birdGameControlsBound=true;
+
+  const root=$("birdGameControls");
+  if(!root) return;
+
+  const bindStick=(id,keyX,keyY)=>{
+    const el=$(id);
+    if(!el) return;
+    const knob=el.querySelector(".bird-stick-knob");
+    let activePointer=null;
+
+    const update=(e)=>{
+      const r=el.getBoundingClientRect();
+      const cx=r.left+r.width/2, cy=r.top+r.height/2;
+      const max=r.width*.31;
+      let x=(e.clientX-cx)/max, y=(e.clientY-cy)/max;
+      const len=Math.hypot(x,y);
+      if(len>1){x/=len;y/=len;}
+      birdGameInput[keyX]=x;
+      birdGameInput[keyY]=y;
+      if(knob) knob.style.transform=`translate3d(${x*max}px,${y*max}px,0)`;
+    };
+
+    const reset=()=>{
+      activePointer=null;
+      birdGameInput[keyX]=0;
+      birdGameInput[keyY]=0;
+      if(knob) knob.style.transform="translate3d(0,0,0)";
+    };
+
+    el.addEventListener("pointerdown",e=>{
+      e.preventDefault();
+      activePointer=e.pointerId;
+      el.setPointerCapture?.(e.pointerId);
+      update(e);
+    },{passive:false});
+
+    el.addEventListener("pointermove",e=>{
+      if(e.pointerId===activePointer){e.preventDefault();update(e);}
+    },{passive:false});
+
+    el.addEventListener("pointerup",e=>{
+      if(e.pointerId===activePointer) reset();
+    });
+    el.addEventListener("pointercancel",reset);
+  };
+
+  bindStick("birdLeftStick","moveX","moveY");
+  bindStick("birdRightStick","lookX","lookY");
+
+  const hold=(id,key)=>{
+    const el=$(id);
+    if(!el) return;
+    const on=()=>{birdGameInput[key]=true;el.classList.add("active")};
+    const off=()=>{birdGameInput[key]=false;el.classList.remove("active")};
+    el.addEventListener("pointerdown",e=>{e.preventDefault();on()},{passive:false});
+    ["pointerup","pointercancel","pointerleave"].forEach(ev=>el.addEventListener(ev,off));
+  };
+
+  hold("birdUpBtn","up");
+  hold("birdDownBtn","down");
+
+  const speed=$("birdSpeedBtn");
+  if(speed){
+    speed.addEventListener("pointerdown",e=>{
+      e.preventDefault();
+      birdGameInput.boost=true;
+      speed.classList.add("active");
+    },{passive:false});
+    ["pointerup","pointercancel","pointerleave"].forEach(ev=>{
+      speed.addEventListener(ev,()=>{
+        birdGameInput.boost=false;
+        speed.classList.remove("active");
+      });
+    });
+  }
+
+  window.addEventListener("keydown",e=>{
+    if(!playing)return;
+    if(e.key==="w"||e.key==="ArrowUp") birdGameInput.moveY=-1;
+    if(e.key==="s"||e.key==="ArrowDown") birdGameInput.moveY=1;
+    if(e.key==="a"||e.key==="ArrowLeft") birdGameInput.moveX=-1;
+    if(e.key==="d"||e.key==="ArrowRight") birdGameInput.moveX=1;
+    if(e.key===" ") birdGameInput.boost=true;
+    if(e.key==="q") birdGameInput.up=true;
+    if(e.key==="e") birdGameInput.down=true;
+  });
+
+  window.addEventListener("keyup",e=>{
+    if(e.key==="w"||e.key==="ArrowUp"||e.key==="s"||e.key==="ArrowDown") birdGameInput.moveY=0;
+    if(e.key==="a"||e.key==="ArrowLeft"||e.key==="d"||e.key==="ArrowRight") birdGameInput.moveX=0;
+    if(e.key===" ") birdGameInput.boost=false;
+    if(e.key==="q") birdGameInput.up=false;
+    if(e.key==="e") birdGameInput.down=false;
+  });
+}
+
+function showBirdGameControls(show){
+  const root=$("birdGameControls");
+  if(!root)return;
+  root.classList.toggle("active",!!show);
+  root.setAttribute("aria-hidden",show?"false":"true");
+  if(!show){
+    birdGameInput.moveX=birdGameInput.moveY=birdGameInput.lookX=birdGameInput.lookY=0;
+    birdGameInput.up=birdGameInput.down=birdGameInput.boost=false;
+  }
+}
+
 /* ------------------------- PLAY ------------------------- */
 
 function togglePlay(){
@@ -1563,13 +1786,19 @@ function togglePlay(){
 
 function startPlay(){
   playing=true;
-  $("playOverlay").style.display="block";
+  $("playOverlay").style.display="none";
   $("playBtn").textContent="⏹ Stop";
+  setupBirdGameControls();
+  showBirdGameControls(true);
+  findBirdGameTarget();
+  setBirdGameAnimation("flapping");
   toastMsg("Play mode");
 }
 
 function stopPlay(){
   playing=false;
+  showBirdGameControls(false);
+  birdGameTarget=null;
   $("playOverlay").style.display="none";
   $("playBtn").textContent="▶ Play";
   toastMsg("Editor mode");
@@ -1739,6 +1968,8 @@ function animate(){
       controller.update(1/60);
     }
   });
+
+  updateBirdGame(1/60);
 
   renderer.render(scene,camera);
 }
@@ -2341,8 +2572,12 @@ async function importGLTF(file){
 
       bird.update=function(dt){
         this.mixer.update(dt);
-        cycleTimer+=dt;
 
+        // Editor preview keeps the verified test cycle.
+        // Play Mode is controlled by the mobile flight system.
+        if(playing) return;
+
+        cycleTimer+=dt;
         if(cycleTimer>=cycleDuration){
           cycleIndex=(cycleIndex+1)%cycle.length;
           beginCycleState();
@@ -2527,10 +2762,16 @@ function startEnhancedPlay(){
   $("playOverlay").style.display="none";
   $("playBtn").textContent="⏹ Stop";
   animationTime=0;
+  setupBirdGameControls();
+  showBirdGameControls(true);
+  findBirdGameTarget();
+  setBirdGameAnimation("flapping");
   toastMsg("Play mode");
 }
 function stopEnhancedPlay(){
   playing=false;
+  showBirdGameControls(false);
+  birdGameTarget=null;
   $("playOverlay").style.display="none";
   $("playBtn").textContent="▶ Play";
   toastMsg("Editor mode");
@@ -2970,5 +3211,69 @@ window.addEventListener("load",()=>{
   window.addEventListener("load",()=>setTimeout(()=>{$a("assetManagerBtn")?.addEventListener("click",()=>{const p=$a("assetManagerPanel");p?.classList.contains("open")?close():open()});$a("assetCloseBtn")?.addEventListener("click",close);$a("amModelsTab")?.addEventListener("click",()=>setTab("model"));$a("amTexturesTab")?.addEventListener("click",()=>setTab("texture"));$a("amAddBtn")?.addEventListener("click",addAsset);$a("amRefreshBtn")?.addEventListener("click",renderAssets);openDB().catch(()=>{})},180));
 })();
 </script>
+
+<!-- BIRD GAME CONTROLS: visible only in Play Mode -->
+<div id="birdGameControls" aria-hidden="true">
+  <div id="birdLeftStick" class="bird-stick">
+    <div class="bird-stick-ring"><div class="bird-stick-knob"></div></div>
+  </div>
+  <div id="birdRightStick" class="bird-stick">
+    <div class="bird-stick-ring"><div class="bird-stick-knob"></div></div>
+  </div>
+  <div id="birdFlightButtons">
+    <button id="birdUpBtn" type="button">▲</button>
+    <button id="birdDownBtn" type="button">▼</button>
+  </div>
+  <div id="birdSpeedBtn">⚡</div>
+</div>
+<style>
+#birdGameControls{
+  position:absolute; inset:0; z-index:40; pointer-events:none;
+  display:none; user-select:none; -webkit-user-select:none;
+}
+#birdGameControls.active{display:block}
+.bird-stick{position:absolute;bottom:28px;width:132px;height:132px;pointer-events:auto;touch-action:none}
+#birdLeftStick{left:22px}
+#birdRightStick{right:22px}
+.bird-stick-ring{
+  position:absolute;inset:0;border-radius:50%;
+  background:rgba(12,18,28,.34);
+  border:2px solid rgba(255,255,255,.28);
+  box-shadow:0 8px 30px rgba(0,0,0,.22);
+  backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);
+}
+.bird-stick-knob{
+  position:absolute;left:50%;top:50%;width:54px;height:54px;
+  margin:-27px;border-radius:50%;
+  background:rgba(255,255,255,.82);
+  border:1px solid rgba(255,255,255,.8);
+  box-shadow:0 5px 18px rgba(0,0,0,.25);
+  transform:translate3d(0,0,0);
+}
+#birdFlightButtons{
+  position:absolute;right:172px;bottom:34px;
+  display:flex;flex-direction:column;gap:10px;pointer-events:auto;
+}
+#birdFlightButtons button,#birdSpeedBtn{
+  width:52px;height:52px;border:1px solid rgba(255,255,255,.25);
+  border-radius:16px;background:rgba(12,18,28,.48);
+  color:#fff;font-size:20px;font-weight:700;
+  box-shadow:0 7px 20px rgba(0,0,0,.2);
+  touch-action:none;-webkit-tap-highlight-color:transparent;
+}
+#birdSpeedBtn{
+  position:absolute;right:24px;bottom:178px;
+  display:flex;align-items:center;justify-content:center;
+  pointer-events:auto;font-size:19px;
+}
+#birdGameControls button:active,#birdSpeedBtn.active{transform:scale(.94);background:rgba(255,255,255,.24)}
+@media (max-width:600px){
+  .bird-stick{width:116px;height:116px;bottom:22px}
+  #birdLeftStick{left:16px} #birdRightStick{right:16px}
+  .bird-stick-knob{width:48px;height:48px;margin:-24px}
+  #birdFlightButtons{right:142px;bottom:25px}
+  #birdSpeedBtn{right:17px;bottom:156px}
+}
+</style>
 </body>
 </html>
