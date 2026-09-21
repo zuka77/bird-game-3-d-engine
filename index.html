@@ -1718,7 +1718,7 @@ let gizmoDragPointerId=null;
 
 function animate(){
   glbMixers.forEach(rec=>{
-    if(rec && rec.mixer) rec.mixer.update(1/60);
+    if(rec && rec.mixer) rec.mixer.update(0.016);
   });
   requestAnimationFrame(animate);
 
@@ -2269,10 +2269,63 @@ async function importGLTF(file){
     // Everything else in the original importer remains unchanged.
     if(gltf.animations && gltf.animations.length){
       const mixer = new THREE.AnimationMixer(root);
-      const actions = gltf.animations.map(clip => mixer.clipAction(clip));
-      actions[0].reset().setLoop(THREE.LoopRepeat, Infinity).play();
-      glbMixers.set(root.uuid, {mixer, actions});
-      root.userData.glbAnimations = gltf.animations;
+      const clips = gltf.animations;
+      const actions = clips.map(clip => mixer.clipAction(clip));
+
+      const findClip = (words) => {
+        const i = clips.findIndex(c =>
+          words.some(w => c.name.toLowerCase().includes(w))
+        );
+        return i >= 0 ? i : -1;
+      };
+
+      const anim = {
+        mixer,
+        clips,
+        actions,
+        current: -1,
+        names: clips.map(c => c.name),
+        takeoff: findClip(["takeoff","take_off","take off"]),
+        fly: findClip(["fly","flap","flight"]),
+        glide: findClip(["glide","soar"]),
+        landing: findClip(["landing","land"]),
+        idle: findClip(["idle","ground"])
+      };
+
+      const playState = (state, loop=true) => {
+        const i = anim[state];
+        if(i == null || i < 0) return false;
+        if(anim.current === i && actions[i].isRunning()) return true;
+
+        actions.forEach(a => a.stop());
+        const a = actions[i];
+        a.reset();
+        a.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, loop ? Infinity : 1);
+        a.clampWhenFinished = !loop;
+        a.play();
+        anim.current = i;
+        return true;
+      };
+
+      // Public controls for the game code:
+      root.userData.setBirdAnimation = (state) => playState(state, state !== "takeoff" && state !== "landing");
+      root.userData.birdAnimation = anim;
+
+      // Start naturally: Takeoff once, then Fly/Glide.
+      if(!playState("takeoff", false))
+        if(!playState("fly", true))
+          if(!playState("glide", true))
+            playState("idle", true);
+
+      mixer.addEventListener("finished", e => {
+        if(e.action === actions[anim.takeoff])
+          playState("fly", true) || playState("glide", true);
+        else if(e.action === actions[anim.landing])
+          playState("idle", true);
+      });
+
+      glbMixers.set(root.uuid, anim);
+      root.userData.glbAnimations = clips;
     }
 
     root.name = uniqueName("Model");
