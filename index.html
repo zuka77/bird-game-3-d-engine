@@ -2273,9 +2273,35 @@ async function importGLTF(file){
       const actions = clips.map(clip => mixer.clipAction(clip));
 
       const findClip = (words) => {
-        const i = clips.findIndex(c =>
-          words.some(w => c.name.toLowerCase().includes(w))
-        );
+        const normalized = s => String(s || "")
+          .toLowerCase()
+          .replace(/[|_\-]+/g, " ")
+          .replace(/\s+/g, " ")
+          .trim();
+
+        const list = words.map(normalized);
+        let i = clips.findIndex(c => {
+          const n = normalized(c.name);
+          return list.some(w => n === w || n.endsWith(" " + w) || n.includes(w));
+        });
+
+        // Explicit aliases for the uploaded Pigeon GLB.
+        if(i < 0){
+          i = clips.findIndex(c => {
+            const n = normalized(c.name);
+            if(words.includes("flap") || words.includes("fly") || words.includes("flight"))
+              return n.includes("flapping");
+            if(words.includes("glide") || words.includes("soar"))
+              return n.includes("gliding");
+            if(words.includes("landing") || words.includes("land"))
+              return n.includes("landing");
+            if(words.includes("idle") || words.includes("ground"))
+              return n.includes("standing idle") || n.includes("idle");
+            if(words.includes("takeoff") || words.includes("take off"))
+              return n.includes("takeoff");
+            return false;
+          });
+        }
         return i >= 0 ? i : -1;
       };
 
@@ -2311,7 +2337,8 @@ async function importGLTF(file){
       root.userData.setBirdAnimation = (state) => playState(state, state !== "takeoff" && state !== "landing");
       root.userData.birdAnimation = anim;
 
-      // Start naturally: Takeoff once, then Fly/Glide.
+      // Start naturally: Takeoff once, then Flapping. Glide is available
+      // as a separate state for the game movement system.
       if(!playState("takeoff", false))
         if(!playState("fly", true))
           if(!playState("glide", true))
