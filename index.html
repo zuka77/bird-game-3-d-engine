@@ -82,9 +82,14 @@ canvas{display:block;width:100%;height:100%;touch-action:none}
   border:1px solid #394659;font-size:12px;display:none;white-space:nowrap
 }
 #playOverlay{
-  position:absolute;inset:0;z-index:20;display:none;background:#071019
+  position:absolute;left:0;top:0;width:100%;height:100%;z-index:20;display:none !important;background:transparent;
+  pointer-events:none;
 }
-#playOverlay canvas{width:100%;height:100%}
+#playOverlay canvas{width:100%;height:100%;pointer-events:none}
+/* Prevent the accidental narrow vertical overlay/strip seen on mobile Safari. */
+#playOverlay[style*="display: block"]{width:100%;height:100%;}
+#playOverlay[style*="display: block"] #playBar{pointer-events:auto}
+#playOverlay[style*="display: block"] #playInfo{pointer-events:none}
 #playBar{
   position:absolute;z-index:25;top:12px;left:50%;transform:translateX(-50%);
   display:flex;gap:7px
@@ -1313,7 +1318,8 @@ function togglePlay(){
 
 function startPlay(){
   playing=true;
-  $("playOverlay").style.display="block";
+  // Play mode runs the scene animation without creating the unwanted mobile overlay.
+  $("playOverlay").style.display="none";
   $("playBtn").textContent="⏹ Stop";
   toastMsg("Play mode");
 }
