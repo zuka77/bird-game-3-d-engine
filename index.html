@@ -2179,6 +2179,352 @@ window.addEventListener("load",()=>{
   setTimeout(bindEnhancedUI,80);
 });
 
+/* ========================= BIRD ENGINE PRO PACK =========================
+   Extends the existing one-file editor without removing its original API.
+   Mobile-first utilities: materials, shadows, physics-lite, particles,
+   scene groups, screenshots, project reset, game mode, camera controls,
+   object duplication, emissive/wireframe, and safer project persistence.
+   ====================================================================== */
+(function(){
+  "use strict";
+  const E = id => document.getElementById(id);
+  const safeToast = msg => { try{ toastMsg(msg); }catch{} };
+  const getMat = o => o && o.material ? (Array.isArray(o.material)?o.material[0]:o.material) : null;
+
+  let pro = {
+    shadows:true,
+    physics:false,
+    gravity:-9.8,
+    velocity:new Map(),
+    particleSystems:[],
+    gameMode:false,
+    gameYaw:0,
+    gamePitch:0,
+    cameraFov:60,
+    sceneNotes:"",
+    savedScenes:[],
+    skyColor:0x090d13
+  };
+
+  /* ---------- renderer quality / shadows ---------- */
+  try{
+    renderer.shadowMap.enabled=true;
+    renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+    mainLight.castShadow=true;
+    mainLight.shadow.mapSize.set(1024,1024);
+    mainLight.shadow.camera.near=.1;
+    mainLight.shadow.camera.far=100;
+    mainLight.shadow.camera.left=-30;
+    mainLight.shadow.camera.right=30;
+    mainLight.shadow.camera.top=30;
+    mainLight.shadow.camera.bottom=-30;
+  }catch{}
+
+  const markShadow = o => {
+    if(!o) return;
+    o.traverse?.(c=>{
+      if(c.isMesh){ c.castShadow=pro.shadows; c.receiveShadow=true; }
+    });
+  };
+
+  const _proAddPrimitive = addPrimitive;
+  addPrimitive = function(type,pos=null,select=true){
+    const o=_proAddPrimitive(type,pos,select);
+    markShadow(o);
+    return o;
+  };
+
+  /* ---------- extra primitives ---------- */
+  function addProGeometry(kind){
+    let geo=null, color=0xffffff;
+    if(kind==='Octa') { geo=new THREE.OctahedronGeometry(.95,1); color=0x7fdcff; }
+    if(kind==='Tetra') { geo=new THREE.TetrahedronGeometry(1,1); color=0xff8db1; }
+    if(kind==='Knot') { geo=new THREE.TorusKnotGeometry(.72,.24,96,20); color=0xffcf55; }
+    if(kind==='Dodeca') { geo=new THREE.DodecahedronGeometry(1,1); color=0x9cff9c; }
+    if(kind==='Circle') { geo=new THREE.CircleGeometry(1.2,48); color=0x66ddff; }
+    if(kind==='BoxFrame') { geo=new THREE.BoxGeometry(1.7,1.7,1.7); color=0xffffff; }
+    if(!geo)return;
+    const m=new THREE.MeshStandardMaterial({color,roughness:.5,metalness:.1});
+    const o=new THREE.Mesh(geo,m);
+    o.name=uniqueName(kind);
+    o.userData.engine=true;o.userData.type=kind;o.userData.locked=false;o.userData.hidden=false;
+    o.position.set(0,1,0);
+    if(kind==='Circle')o.rotation.x=-Math.PI/2;
+    if(kind==='BoxFrame')m.wireframe=true;
+    scene.add(o);objects.push(o);markShadow(o);refreshSceneList();selectObject(o);saveHistory();updateStatus();safeToast(kind+' created');
+    return o;
+  }
+
+  /* ---------- material helpers ---------- */
+  function setMaterialColor(hex){
+    const m=getMat(selected); if(!m)return;
+    if(m.color)m.color.set(hex);
+    m.needsUpdate=true; scheduleHistory(); updateInspector();
+  }
+  function setEmissive(hex,intensity){
+    const m=getMat(selected); if(!m)return;
+    if('emissive' in m)m.emissive.set(hex);
+    if('emissiveIntensity' in m)m.emissiveIntensity=Number(intensity)||0;
+    m.needsUpdate=true;scheduleHistory();
+  }
+  function toggleWireframe(){
+    const m=getMat(selected); if(!m)return;
+    m.wireframe=!m.wireframe;m.needsUpdate=true;updateInspector();saveHistory();
+  }
+
+  /* ---------- object utilities ---------- */
+  function frameAll(){
+    if(!objects.length){safeToast('Scene is empty');return;}
+    const box=new THREE.Box3();objects.forEach(o=>{if(o.visible)box.expandByObject(o);});
+    if(box.isEmpty())return;
+    const c=box.getCenter(new THREE.Vector3()),s=box.getSize(new THREE.Vector3());
+    targetCameraTarget.copy(c);targetDistance=Math.max(4,Math.max(s.x,s.y,s.z)*2.2);safeToast('Framed all objects');
+  }
+  function resetScenePro(){
+    objects.slice().forEach(o=>removeObject(o));objects=[];selected=null;
+    createDefaultScene();pro.velocity.clear();pro.particleSystems=[];keyframes=[];renderKeyframes();
+    refreshSceneList();updateInspector();saveHistory(false);safeToast('Scene reset');
+  }
+  function duplicateMany(){
+    if(!selected){safeToast('Select an object');return;}
+    duplicateSelected();
+  }
+
+  /* ---------- simple physics ---------- */
+  function setPhysics(on){
+    pro.physics=!!on;
+    if(!on){pro.velocity.clear();}
+    safeToast(on?'Physics ON':'Physics OFF');
+  }
+  function physicsStep(dt){
+    if(!pro.physics||playing===false)return;
+    objects.forEach(o=>{
+      if(!o.visible||o.userData.locked||o.userData.type==='Light'||o.userData.system)return;
+      let v=pro.velocity.get(o.uuid);if(!v){v=new THREE.Vector3();pro.velocity.set(o.uuid,v);}
+      v.y += pro.gravity*dt;
+      o.position.addScaledVector(v,dt);
+      const floor=0.02;
+      if(o.position.y<floor){o.position.y=floor; if(v.y<0)v.y*=-.32; v.x*=.985;v.z*=.985;}
+    });
+  }
+
+  /* ---------- particle system ---------- */
+  function addParticles(){
+    const group=new THREE.Group();
+    group.name=uniqueName('Particles');group.userData.engine=true;group.userData.type='Particles';group.userData.locked=false;
+    const count=180, geo=new THREE.SphereGeometry(.035,6,6), mat=new THREE.MeshBasicMaterial({color:0x9ee7ff});
+    const mesh=new THREE.InstancedMesh(geo,mat,count);group.add(mesh);scene.add(group);objects.push(group);
+    const dummy=new THREE.Object3D(), data=[];
+    for(let i=0;i<count;i++){
+      data.push({x:(Math.random()-.5)*2,y:Math.random()*2,z:(Math.random()-.5)*2,vy:.2+Math.random()*.7});
+    }
+    group.userData.particles=data;group.userData.mesh=mesh;group.userData.count=count;group.userData.particleSystem=true;
+    markShadow(group);refreshSceneList();selectObject(group);saveHistory();safeToast('Particles created');
+  }
+  function updateParticles(dt){
+    objects.forEach(g=>{
+      if(!g.userData?.particleSystem)return;
+      const mesh=g.userData.mesh, data=g.userData.particles, dummy=new THREE.Object3D();
+      for(let i=0;i<data.length;i++){
+        const p=data[i];p.y+=p.vy*dt;if(p.y>2.4){p.y=0;p.x=(Math.random()-.5)*2;p.z=(Math.random()-.5)*2;}
+        dummy.position.set(p.x,p.y,p.z);dummy.scale.setScalar(.7+.3*Math.sin(i+performance.now()*.002));dummy.updateMatrix();mesh.setMatrixAt(i,dummy.matrix);
+      }
+      mesh.instanceMatrix.needsUpdate=true;
+    });
+  }
+
+  /* ---------- screenshot ---------- */
+  function screenshot(){
+    try{
+      renderer.render(scene,camera);
+      const a=document.createElement('a');a.href=renderer.domElement.toDataURL('image/png');a.download='bird-engine-scene.png';a.click();safeToast('Screenshot created');
+    }catch{safeToast('Screenshot unavailable');}
+  }
+
+  /* ---------- camera FOV ---------- */
+  function setFov(v){pro.cameraFov=clamp(Number(v)||60,25,100);camera.fov=pro.cameraFov;camera.updateProjectionMatrix();}
+
+  /* ---------- game mode ---------- */
+  function setGameMode(on){
+    pro.gameMode=!!on;
+    if(on){ setMode('camera'); safeToast('Game mode ON'); }
+    else safeToast('Editor mode');
+  }
+  function gameLook(dx,dy){
+    if(!pro.gameMode)return;
+    targetYaw-=dx*.004;targetPitch=clamp(targetPitch-dy*.004,-1.45,1.45);
+  }
+
+  /* ---------- better touch handling for game mode ---------- */
+  const _pd=pointerDown,_pm=pointerMove;
+  pointerDown=function(e){
+    if(pro.gameMode){pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});lastPointer.x=e.clientX;lastPointer.y=e.clientY;return;}
+    _pd(e);
+  };
+  pointerMove=function(e){
+    if(pro.gameMode){
+      if(!pointers.has(e.pointerId))return;
+      const dx=e.clientX-lastPointer.x,dy=e.clientY-lastPointer.y;gameLook(dx,dy);lastPointer.x=e.clientX;lastPointer.y=e.clientY;return;
+    }
+    _pm(e);
+  };
+
+  /* ---------- enhanced persistence ---------- */
+  const _projectData=projectData;
+  projectData=function(){
+    const d=_projectData();
+    d.version=5;
+    d.pro={shadows:pro.shadows,physics:pro.physics,gravity:pro.gravity,cameraFov:pro.cameraFov,worldMode,enhancedFog,sceneNotes:pro.sceneNotes};
+    return d;
+  };
+  const _autoLoad=autoLoad;
+  autoLoad=function(){
+    _autoLoad();
+    try{const raw=localStorage.getItem(STORAGE_KEY);if(!raw)return;const d=JSON.parse(raw);if(d.pro){pro.shadows=d.pro.shadows!==false;pro.physics=!!d.pro.physics;pro.gravity=Number(d.pro.gravity)||-9.8;pro.cameraFov=Number(d.pro.cameraFov)||60;pro.sceneNotes=d.pro.sceneNotes||'';setFov(pro.cameraFov);}}catch{}
+  };
+
+  /* ---------- build extra controls ---------- */
+  function addProSection(){
+    const panel=E('enginePanel');if(!panel)return;
+    if(E('proSection'))return;
+    const sec=document.createElement('div');sec.className='epSection';sec.id='proSection';
+    sec.innerHTML=`
+      <div class="epLabel">PRO TOOLS</div>
+      <div class="epGrid">
+        <button id="proOcta">＋ Octa</button><button id="proKnot">＋ Knot</button>
+        <button id="proTetra">＋ Tetra</button><button id="proDodeca">＋ Dodeca</button>
+        <button id="proParticles">✨ Particles</button><button id="proFrame">🎯 Frame All</button>
+        <button id="proPhysics">⚙ Physics</button><button id="proReset">♻ Reset Scene</button>
+        <button id="proScreenshot">📸 Screenshot</button><button id="proWire">▧ Wireframe</button>
+        <button id="proGame">🎮 Game Mode</button><button id="proShadow">💡 Shadows</button>
+      </div>
+      <div class="epRow"><span class="epLabel">FOV</span><input id="proFov" type="range" min="25" max="100" step="1" value="60"></div>
+      <div class="epRow"><span class="epLabel">Gravity</span><input id="proGravity" type="range" min="-25" max="0" step=".1" value="-9.8"></div>
+      <div class="epRow"><span class="epLabel">Emissive</span><input id="proEmissive" type="color" value="#000000"></div>
+      <div class="epRow"><span class="epLabel">Glow</span><input id="proGlow" type="range" min="0" max="5" step=".05" value="0"></div>
+    `;
+    panel.appendChild(sec);
+    E('proOcta').onclick=()=>addProGeometry('Octa');E('proKnot').onclick=()=>addProGeometry('Knot');
+    E('proTetra').onclick=()=>addProGeometry('Tetra');E('proDodeca').onclick=()=>addProGeometry('Dodeca');
+    E('proParticles').onclick=addParticles;E('proFrame').onclick=frameAll;E('proReset').onclick=resetScenePro;
+    E('proPhysics').onclick=()=>{setPhysics(!pro.physics);E('proPhysics').textContent=pro.physics?'⚙ Physics ON':'⚙ Physics';};
+    E('proScreenshot').onclick=screenshot;E('proWire').onclick=toggleWireframe;
+    E('proGame').onclick=()=>{setGameMode(!pro.gameMode);E('proGame').textContent=pro.gameMode?'🎮 Game ON':'🎮 Game Mode';};
+    E('proShadow').onclick=()=>{pro.shadows=!pro.shadows;renderer.shadowMap.enabled=pro.shadows;objects.forEach(markShadow);E('proShadow').textContent=pro.shadows?'💡 Shadows ON':'💡 Shadows';};
+    E('proFov').oninput=e=>setFov(e.target.value);E('proGravity').oninput=e=>pro.gravity=Number(e.target.value);
+    E('proEmissive').oninput=e=>setEmissive(e.target.value,E('proGlow').value);E('proGlow').oninput=e=>setEmissive(E('proEmissive').value,e.target.value);
+  }
+
+  /* ---------- inspector extensions ---------- */
+  const _updateInspector=updateInspector;
+  updateInspector=function(){
+    _updateInspector();
+    if(!selected)return;
+    const m=getMat(selected);if(!m)return;
+    const title=E('inspector');if(!title)return;
+    const extra=document.createElement('div');extra.className='epSection';extra.innerHTML=`
+      <div class="fieldLabel">ADVANCED MATERIAL</div>
+      <div class="actionRow"><button id="proWireBtn">▧ Wire</button><button id="proFrameBtn">🎯 Frame</button></div>
+      <div class="fieldLabel">EMISSIVE</div>
+      <input id="proMatEmissive" type="color" value="#${(m.emissive?.getHexString?.()||'000000')}">
+      <div class="fieldLabel">EMISSIVE POWER</div>
+      <input id="proMatGlow" type="range" min="0" max="5" step=".05" value="${Number(m.emissiveIntensity||0)}">
+    `;
+    title.appendChild(extra);
+    E('proWireBtn').onclick=toggleWireframe;E('proFrameBtn').onclick=focusSelected;
+    E('proMatEmissive').oninput=e=>setEmissive(e.target.value,E('proMatGlow').value);
+    E('proMatGlow').oninput=e=>setEmissive(E('proMatEmissive').value,e.target.value);
+  };
+
+  /* ---------- animation loop extension ---------- */
+  const _updatePlay=updatePlayAnimation;
+  updatePlayAnimation=function(){
+    _updatePlay();
+    const now=performance.now();const dt=Math.min(.033,(now-(pro._last||now))/1000);pro._last=now;
+    physicsStep(dt);updateParticles(dt);
+  };
+
+
+  /* ---------- richer object serialization ---------- */
+  const _capturePro = capture;
+  capture = function(){
+    const base=_capturePro();
+    return base.map((d,i)=>{
+      const o=objects[i]; const m=getMat(o);
+      if(m){
+        d.roughness=Number(m.roughness??.68);
+        d.metalness=Number(m.metalness??.05);
+        d.opacity=Number(m.opacity??1);
+        d.transparent=!!m.transparent;
+        d.wireframe=!!m.wireframe;
+        d.emissive=m.emissive?.getHex?.() ?? 0x000000;
+        d.emissiveIntensity=Number(m.emissiveIntensity??0);
+      }
+      if(o?.userData?.lightKind)d.lightKind=o.userData.lightKind;
+      if(o?.userData?.particleSystem)d.particleSystem=true;
+      return d;
+    });
+  };
+  const _restorePro = restoreState;
+  restoreState = function(state){
+    _restorePro(state);
+    try{
+      const arr=JSON.parse(state);
+      arr.forEach(d=>{
+        const o=objects.find(x=>x.name===d.name);
+        const m=getMat(o); if(!m)return;
+        if(Number.isFinite(d.roughness))m.roughness=d.roughness;
+        if(Number.isFinite(d.metalness))m.metalness=d.metalness;
+        if(Number.isFinite(d.opacity))m.opacity=d.opacity;
+        m.transparent=!!d.transparent;
+        m.wireframe=!!d.wireframe;
+        if(m.emissive && d.emissive!=null)m.emissive.setHex(Number(d.emissive));
+        if('emissiveIntensity' in m)m.emissiveIntensity=Number(d.emissiveIntensity)||0;
+        m.needsUpdate=true;
+        markShadow(o);
+      });
+      refreshSceneList();updateInspector();
+    }catch{}
+  };
+
+  /* ---------- save/load buttons use the complete project format ---------- */
+  saveProject = function(){
+    const data=projectData();
+    try{localStorage.setItem(STORAGE_KEY,JSON.stringify(data));}catch{}
+    const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
+    const url=URL.createObjectURL(blob),a=document.createElement('a');
+    a.href=url;a.download='bird-engine-complete-project.json';document.body.appendChild(a);a.click();a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);safeToast('Complete project saved');
+  };
+  loadProject = function(){
+    const input=document.createElement('input');input.type='file';input.accept='.json,application/json';
+    input.onchange=()=>{
+      const file=input.files?.[0];if(!file)return;
+      const r=new FileReader();r.onload=()=>{
+        try{
+          const d=JSON.parse(r.result);if(!Array.isArray(d.objects))throw new Error('bad');
+          restoreState(JSON.stringify(d.objects));
+          if(d.camera){targetYaw=Number(d.camera.yaw)||.65;targetPitch=Number(d.camera.pitch)||.48;targetDistance=Number(d.camera.distance)||9;if(Array.isArray(d.camera.target))targetCameraTarget.fromArray(d.camera.target);}
+          gridVisible=d.grid!==false;grid.visible=gridVisible;$('gridBtn').classList.toggle('active',gridVisible);
+          snapEnabled=d.snap===true;$('snapBtn').textContent=snapEnabled?'🧲 Snap ON':'🧲 Snap OFF';$('snapBtn').classList.toggle('active',snapEnabled);
+          if(d.pro){pro.shadows=d.pro.shadows!==false;pro.physics=!!d.pro.physics;pro.gravity=Number(d.pro.gravity)||-9.8;pro.cameraFov=Number(d.pro.cameraFov)||60;setFov(pro.cameraFov);if(d.pro.worldMode)setWorld(d.pro.worldMode);if(d.pro.sceneNotes!=null)pro.sceneNotes=String(d.pro.sceneNotes);}
+          history=[];historyIndex=-1;saveHistory(false);refreshSceneList();updateInspector();safeToast('Complete project loaded');
+        }catch{safeToast('Invalid project file');}
+      };r.readAsText(file);
+    };input.click();
+  };
+
+  /* ---------- scene export with thumbnail metadata ---------- */
+  const _exportEnhanced=exportEnhancedScene;
+  exportEnhancedScene=function(){
+    const d=projectData();d.thumbnail='runtime-generated';d.notes=pro.sceneNotes;
+    const blob=new Blob([JSON.stringify(d,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='bird-engine-complete-project.json';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),500);safeToast('Complete project exported');
+  };
+
+  /* ---------- init ---------- */
+  window.addEventListener('load',()=>setTimeout(addProSection,120));
+})();
+
 </script>
 </body>
 </html>
