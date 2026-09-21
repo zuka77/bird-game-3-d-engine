@@ -1735,8 +1735,8 @@ function animate(){
   }
 
   birdAnimationControllers.forEach(controller=>{
-    if(controller && controller.mixer){
-      controller.mixer.update(1/60);
+    if(controller && controller.update){
+      controller.update(1/60);
     }
   });
 
@@ -2268,129 +2268,88 @@ async function importGLTF(file){
   const loader = new Loader();
   const done = gltf => {
     const root = gltf.scene;
-    // GLB bird animation controller. This only handles the embedded clips.
+    // GLB bird animation controller.
+    // The uploaded Pigeon contains these exact clips:
+    // Flapping, Gliding, Landing, Standing Idle, Takeoff.
     if(Array.isArray(gltf.animations) && gltf.animations.length){
       const mixer = new THREE.AnimationMixer(root);
       const clips = gltf.animations;
 
-      const normalize = s => String(s || "").toLowerCase()
-        .replace(/[|_\-]+/g, " ")
-        .replace(/\s+/g, " ")
-        .trim();
-
-      const clipIndex = (...names) => {
-        const wanted = names.map(normalize);
-        return clips.findIndex(c => {
-          const n = normalize(c.name);
-          return wanted.some(w => n === w || n.endsWith(" " + w));
-        });
+      const find = name => {
+        const i = clips.findIndex(c => c.name === name || c.name.endsWith("|"+name));
+        return i >= 0 ? i : -1;
       };
 
-      const indices = {
-        flapping: clipIndex("birdrig flapping", "flapping"),
-        gliding: clipIndex("birdrig gliding", "gliding"),
-        landing: clipIndex("birdrig landing", "landing"),
-        idle: clipIndex("birdrig standing idle", "standing idle", "idle"),
-        takeoff: clipIndex("birdrig takeoff", "takeoff")
+      const idx = {
+        flapping: find("Flapping"),
+        gliding: find("Gliding"),
+        landing: find("Landing"),
+        idle: find("Standing Idle"),
+        takeoff: find("Takeoff")
       };
 
       const actions = clips.map(c => mixer.clipAction(c));
-      const controller = {
-        root, mixer, clips, actions, indices,
-        state: null,
-        speed: 1,
-        setState(state){
-          const i = this.indices[state];
-          if(i == null || i < 0) return false;
-          if(this.state === state && actions[i].isRunning()) return true;
 
-          const next = actions[i];
-          const previous = this.state && this.indices[this.state] >= 0
-            ? actions[this.indices[this.state]] : null;
+      const bird = {
+        mixer, clips, actions, idx, state:null,
 
-          next.stop();
-          next.reset();
-          next.enabled = true;
-          next.paused = false;
+        play(name, loop=true){
+          const i=this.idx[name];
+          if(i==null || i<0) return false;
 
-          const oneShot = state === "takeoff" || state === "landing";
-          next.setLoop(oneShot ? THREE.LoopOnce : THREE.LoopRepeat,
-                        oneShot ? 1 : Infinity);
-          next.clampWhenFinished = oneShot;
+          this.actions.forEach(a => a.stop());
 
-          if(previous && previous !== next){
-            next.crossFadeFrom(previous, 0.18, true);
-          }else{
-            next.play();
-          }
-
-          this.state = state;
+          const a=this.actions[i];
+          a.reset();
+          a.enabled=true;
+          a.paused=false;
+          a.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, loop ? Infinity : 1);
+          a.clampWhenFinished=!loop;
+          a.play();
+          this.state=name;
           return true;
         }
       };
 
-      // Expose only the animation controller; no UI/design changes.
-      root.userData.birdAnimation = controller;
-      birdAnimationControllers.set(root.uuid, controller);
+      root.userData.birdAnimation=bird;
+      birdAnimationControllers.set(root.uuid,bird);
 
-      mixer.addEventListener("finished", e => {
-        // The GLB can fire "finished" with the action object, so compare
-        // directly against the actual Takeoff/Landing actions.
-        const takeoffIndex = controller.indices.takeoff;
-        const landingIndex = controller.indices.landing;
+      // Deterministic test cycle so every clip can be verified:
+      // Takeoff -> Flapping -> Gliding -> Landing -> Idle -> repeat.
+      const cycle=[
+        ["takeoff",false],
+        ["flapping",true],
+        ["gliding",true],
+        ["landing",false],
+        ["idle",true]
+      ];
 
-        if(takeoffIndex >= 0 && e.action === actions[takeoffIndex]){
-          // Force the flight clip to start immediately; never leave
-          // Takeoff frozen on its last frame.
-          const nextIndex = controller.indices.flapping >= 0
-            ? controller.indices.flapping
-            : controller.indices.gliding;
+      let cycleIndex=0;
+      let cycleTimer=0;
+      let cycleDuration=0;
 
-          if(nextIndex >= 0){
-            const previous = actions[takeoffIndex];
-            const next = actions[nextIndex];
+      const beginCycleState=()=>{
+        const [name,loop]=cycle[cycleIndex];
+        bird.play(name,loop);
+        cycleDuration=clips[bird.idx[name]].duration;
+        // Give looping states enough time to visibly run before switching.
+        if(loop) cycleDuration=Math.max(2.5,cycleDuration);
+        cycleTimer=0;
+      };
 
-            previous.stop();
-            next.reset();
-            next.enabled = true;
-            next.paused = false;
-            next.setLoop(THREE.LoopRepeat, Infinity);
-            next.clampWhenFinished = false;
-            next.play();
+      beginCycleState();
 
-            controller.state =
-              nextIndex === controller.indices.flapping ? "flapping" : "gliding";
-          }
-        }else if(landingIndex >= 0 && e.action === actions[landingIndex]){
-          const idleIndex = controller.indices.idle;
-          if(idleIndex >= 0){
-            actions[landingIndex].stop();
-            const idle = actions[idleIndex];
-            idle.reset();
-            idle.enabled = true;
-            idle.paused = false;
-            idle.setLoop(THREE.LoopRepeat, Infinity);
-            idle.clampWhenFinished = false;
-            idle.play();
-            controller.state = "idle";
-          }
+      bird.update=function(dt){
+        this.mixer.update(dt);
+        cycleTimer+=dt;
+
+        if(cycleTimer>=cycleDuration){
+          cycleIndex=(cycleIndex+1)%cycle.length;
+          beginCycleState();
         }
-      });
-
-      // Start the bird correctly: takeoff once, then continuous flight.
-      if(!controller.setState("takeoff")){
-        if(!controller.setState("flapping")){
-          if(!controller.setState("gliding")){
-            controller.setState("idle");
-          }
-        }
-      }
+      };
     }
 
-    root.name = uniqueName("Model");
-    root.userData.engine = true;
-    root.userData.type = "Model";
-    root.userData.locked = false;
     scene.add(root);
     objects.push(root);
     importedModels.push(root);
