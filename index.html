@@ -72,22 +72,19 @@ canvas{display:block;width:100%;height:100%;touch-action:none}
 }
 #viewBadge{left:12px}
 #modeBadge{right:12px}
-/* Object-count overlay hidden: keeps all object-count logic intact without the unwanted bar. */
-#statusBadge{display:none !important}
+#statusBadge{
+  left:50%;bottom:12px;transform:translateX(-50%);
+  white-space:nowrap
+}
 #toast{
   position:absolute;z-index:100;left:50%;bottom:70px;transform:translateX(-50%);
   background:#202a38;padding:10px 14px;border-radius:10px;
   border:1px solid #394659;font-size:12px;display:none;white-space:nowrap
 }
 #playOverlay{
-  position:absolute;left:0;top:0;width:100%;height:100%;z-index:20;display:none !important;background:transparent;
-  pointer-events:none;
+  position:absolute;inset:0;z-index:20;display:none;background:#071019
 }
-#playOverlay canvas{width:100%;height:100%;pointer-events:none}
-/* Prevent the accidental narrow vertical overlay/strip seen on mobile Safari. */
-#playOverlay[style*="display: block"]{width:100%;height:100%;}
-#playOverlay[style*="display: block"] #playBar{pointer-events:auto}
-#playOverlay[style*="display: block"] #playInfo{pointer-events:none}
+#playOverlay canvas{width:100%;height:100%}
 #playBar{
   position:absolute;z-index:25;top:12px;left:50%;transform:translateX(-50%);
   display:flex;gap:7px
@@ -140,6 +137,41 @@ canvas{display:block;width:100%;height:100%;touch-action:none}
   #top{overflow:hidden}
   #toolbar{min-width:0}
 }
+
+/* ================= ENHANCED ENGINE UI ================= */
+#statusBadge{display:none!important}
+#enhancedBar{
+  position:absolute;left:10px;right:10px;bottom:10px;z-index:8;
+  display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;
+  padding:6px;border-radius:12px;background:#111720d9;
+  border:1px solid #303949;backdrop-filter:blur(8px)
+}
+#enhancedBar::-webkit-scrollbar{display:none}
+#enhancedBar button{font-size:10px;padding:8px 10px}
+#enginePanel{
+  position:absolute;right:10px;top:55px;z-index:30;width:245px;max-height:72%;
+  overflow:auto;background:#121923f5;border:1px solid #344052;border-radius:14px;
+  padding:11px;display:none;box-shadow:0 15px 45px #0008
+}
+#enginePanel.open{display:block}
+.epTitle{font-size:12px;font-weight:900;margin:2px 0 9px}
+.epSection{padding:9px 0;border-top:1px solid #2b3544}
+.epGrid{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.epGrid button{font-size:10px}
+.epRow{display:flex;gap:6px;align-items:center;margin:5px 0}
+.epRow>*{flex:1}
+.epLabel{font-size:9px;color:#8e99aa}
+#modelFile,#textureFile,#projectFile{display:none}
+#hierarchyBox{font-size:10px;color:#b7c0cc;line-height:1.45}
+.hnode{padding:5px 7px;margin:2px 0;border-radius:7px;background:#1b2330}
+.hnode.sel{background:#35d477;color:#07130c}
+#keyframesBox{font-size:9px;color:#9ba6b6}
+@media(max-width:650px){
+  #enginePanel{width:205px;max-height:65%}
+  #enhancedBar{bottom:8px}
+  #enhancedBar button{font-size:9px;padding:7px 8px}
+}
+
 </style>
 </head>
 
@@ -204,6 +236,94 @@ canvas{display:block;width:100%;height:100%;touch-action:none}
     <div id="statusBadge" class="badge">0 objects</div>
     <div id="toast"></div>
 
+<div id="enhancedBar">
+  <button id="engineMenuBtn">⚙ Engine</button>
+  <button id="materialBtn">🎨 Material</button>
+  <button id="textureBtn">🖼 Texture</button>
+  <button id="terrainBtn">🏔 Terrain</button>
+  <button id="skyBtn">🌌 Sky</button>
+  <button id="cameraSaveBtn">📷 Save Cam</button>
+  <button id="cameraLoadBtn">📷 Load Cam</button>
+  <button id="modelBtn">📦 3D Model</button>
+  <button id="keyBtn">🎬 Keyframe</button>
+</div>
+
+<div id="enginePanel">
+  <div class="epTitle">⚙ BIRD ENGINE</div>
+
+  <div class="epSection">
+    <div class="epLabel">WORLD</div>
+    <div class="epGrid">
+      <button id="worldDayBtn">☀ Day</button>
+      <button id="worldNightBtn">🌙 Night</button>
+      <button id="fogBtn">🌫 Fog</button>
+      <button id="clearFogBtn">✖ Fog</button>
+    </div>
+  </div>
+
+  <div class="epSection">
+    <div class="epLabel">OBJECT</div>
+    <div class="epGrid">
+      <button id="addIcosaBtn">＋ Crystal</button>
+      <button id="addRingBtn">＋ Ring</button>
+      <button id="addTerrainBtn">＋ Terrain</button>
+      <button id="centerBtn">🎯 Center</button>
+    </div>
+  </div>
+
+  <div class="epSection">
+    <div class="epLabel">MATERIAL</div>
+    <div class="epRow">
+      <span class="epLabel">Metal</span><input id="metalRange" type="range" min="0" max="1" step=".01" value=".05">
+    </div>
+    <div class="epRow">
+      <span class="epLabel">Rough</span><input id="roughRange" type="range" min="0" max="1" step=".01" value=".68">
+    </div>
+    <div class="epRow">
+      <span class="epLabel">Opacity</span><input id="opacityRange" type="range" min=".05" max="1" step=".01" value="1">
+    </div>
+  </div>
+
+  <div class="epSection">
+    <div class="epLabel">LIGHT</div>
+    <div class="epGrid">
+      <button id="addPointBtn">💡 Point</button>
+      <button id="addSpotBtn">🔦 Spot</button>
+      <button id="addDirBtn">☀ Direction</button>
+      <button id="lightResetBtn">↺ Reset</button>
+    </div>
+  </div>
+
+  <div class="epSection">
+    <div class="epLabel">HIERARCHY</div>
+    <div class="epGrid">
+      <button id="parentBtn">🔗 Parent</button>
+      <button id="unparentBtn">↩ Unparent</button>
+    </div>
+    <div id="hierarchyBox"></div>
+  </div>
+
+  <div class="epSection">
+    <div class="epLabel">ANIMATION</div>
+    <div class="epGrid">
+      <button id="recordBtn">⏺ Record</button>
+      <button id="clearKeysBtn">🗑 Keys</button>
+    </div>
+    <div id="keyframesBox">No keyframes</div>
+  </div>
+
+  <div class="epSection">
+    <div class="epGrid">
+      <button id="exportSceneBtn">📤 Export JSON</button>
+      <button id="importSceneBtn">📥 Import JSON</button>
+    </div>
+  </div>
+</div>
+
+<input id="textureFile" type="file" accept="image/*">
+<input id="modelFile" type="file" accept=".glb,.gltf,model/gltf-binary,model/gltf+json">
+<input id="projectFile" type="file" accept=".json,application/json">
+
     <div id="playOverlay">
       <div id="playBar">
         <button id="stopPlayBtn" class="danger">⏹ Stop</button>
@@ -224,6 +344,7 @@ canvas{display:block;width:100%;height:100%;touch-action:none}
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/loaders/GLTFLoader.js"></script>
 <script>
 "use strict";
 
@@ -1316,8 +1437,7 @@ function togglePlay(){
 
 function startPlay(){
   playing=true;
-  // Play mode runs the scene animation without creating the unwanted mobile overlay.
-  $("playOverlay").style.display="none";
+  $("playOverlay").style.display="block";
   $("playBtn").textContent="⏹ Stop";
   toastMsg("Play mode");
 }
@@ -1533,6 +1653,475 @@ function toastMsg(text){
 /* ------------------------- BOOT ------------------------- */
 
 start();
+
+/* ================= ENHANCED ENGINE MODULE =================
+   This layer extends the original engine instead of replacing it.
+   ========================================================== */
+
+let enhancedFog=false;
+let selectedCameraSlot=null;
+let keyframes=[];
+let animationTime=0;
+let recordingKeys=false;
+let importedModels=[];
+let worldMode="day";
+
+function enhancedMaterialTarget(){
+  return selected && selected.material && selected.material.isMaterial ? selected : null;
+}
+
+function setMaterialProperty(prop,value){
+  const o=enhancedMaterialTarget();
+  if(!o)return;
+  const mats=Array.isArray(o.material)?o.material:[o.material];
+  mats.forEach(m=>{
+    if(prop==="metalness")m.metalness=Number(value);
+    if(prop==="roughness")m.roughness=Number(value);
+    if(prop==="opacity"){
+      m.opacity=Number(value);
+      m.transparent=Number(value)<.999;
+      m.needsUpdate=true;
+    }
+  });
+  scheduleHistory();
+}
+
+function applyTexture(file){
+  if(!selected || !selected.material) return;
+  const reader=new FileReader();
+  reader.onload=()=>{
+    const loader=new THREE.TextureLoader();
+    loader.load(reader.result,tex=>{
+      tex.colorSpace=THREE.SRGBColorSpace;
+      const mats=Array.isArray(selected.material)?selected.material:[selected.material];
+      mats.forEach(m=>{
+        m.map=tex;
+        m.needsUpdate=true;
+      });
+      toastMsg("Texture applied");
+      saveHistory();
+    });
+  };
+  reader.readAsDataURL(file);
+}
+
+function addAdvancedGeometry(type){
+  let geo;
+  if(type==="Icosa"){
+    geo=new THREE.IcosahedronGeometry(.95,2);
+  }else if(type==="Ring"){
+    geo=new THREE.RingGeometry(.45,1,48);
+  }else{
+    return;
+  }
+  const m=new THREE.Mesh(geo,makeMaterial(type==="Ring"?0xffcc55:0x66aaff));
+  m.name=uniqueName(type);
+  m.userData.engine=true;
+  m.userData.type=type;
+  m.userData.locked=false;
+  m.position.set(0,1,0);
+  if(type==="Ring")m.rotation.x=-Math.PI/2;
+  scene.add(m);
+  objects.push(m);
+  refreshSceneList();
+  selectObject(m);
+  saveHistory();
+  updateStatus();
+}
+
+function addProceduralTerrain(){
+  const size=18, seg=48;
+  const geo=new THREE.PlaneGeometry(size,size,seg,seg);
+  const pos=geo.attributes.position;
+  for(let i=0;i<pos.count;i++){
+    const x=pos.getX(i), y=pos.getY(i);
+    const h=
+      Math.sin(x*.75)*.18+
+      Math.cos(y*.55)*.15+
+      Math.sin((x+y)*.32)*.25+
+      Math.cos(x*1.7-y*.4)*.08;
+    pos.setZ(i,h);
+  }
+  geo.computeVertexNormals();
+  const m=new THREE.Mesh(geo,new THREE.MeshStandardMaterial({
+    color:0x426b45,roughness:.95,metalness:0
+  }));
+  m.rotation.x=-Math.PI/2;
+  m.position.y=.02;
+  m.name=uniqueName("Terrain");
+  m.userData.engine=true;
+  m.userData.type="Terrain";
+  m.userData.locked=false;
+  scene.add(m);
+  objects.push(m);
+  refreshSceneList();
+  selectObject(m);
+  saveHistory();
+  updateStatus();
+  toastMsg("Terrain created");
+}
+
+function setWorld(modeName){
+  worldMode=modeName;
+  if(modeName==="day"){
+    scene.background=new THREE.Color(0x8fc7ee);
+    if(ambientLight)ambientLight.intensity=2;
+    if(mainLight){
+      mainLight.intensity=2.4;
+      mainLight.color.set(0xffffff);
+    }
+  }else{
+    scene.background=new THREE.Color(0x071022);
+    if(ambientLight)ambientLight.intensity=.65;
+    if(mainLight){
+      mainLight.intensity=.7;
+      mainLight.color.set(0x8da9ff);
+    }
+  }
+  toastMsg(modeName==="day"?"Day environment":"Night environment");
+}
+
+function toggleFog(on){
+  if(on){
+    scene.fog=new THREE.Fog(0x8fa5b8,8,55);
+    enhancedFog=true;
+  }else{
+    scene.fog=null;
+    enhancedFog=false;
+  }
+}
+
+function addAdvancedLight(kind){
+  let light;
+  if(kind==="point"){
+    light=new THREE.PointLight(0xffffff,6,30);
+  }else if(kind==="spot"){
+    light=new THREE.SpotLight(0xffffff,10,40,Math.PI/7,.35,1);
+    light.target.position.set(0,0,0);
+    scene.add(light.target);
+  }else{
+    light=new THREE.DirectionalLight(0xffffff,2);
+  }
+  light.name=uniqueName(kind==="point"?"Point Light":kind==="spot"?"Spot Light":"Direction Light");
+  light.userData.engine=true;
+  light.userData.type="Light";
+  light.userData.lightKind=kind;
+  light.userData.locked=false;
+  light.position.set(2,5,3);
+  scene.add(light);
+  objects.push(light);
+  refreshSceneList();
+  selectObject(light);
+  saveHistory();
+  updateStatus();
+}
+
+function resetAdvancedLights(){
+  if(ambientLight)ambientLight.intensity=1.8;
+  if(mainLight){
+    mainLight.intensity=2.4;
+    mainLight.position.set(8,12,7);
+    mainLight.color.set(0xffffff);
+  }
+  toastMsg("Lights reset");
+}
+
+function updateHierarchy(){
+  const box=$("hierarchyBox");
+  if(!box)return;
+  box.innerHTML="";
+  objects.forEach(o=>{
+    const el=document.createElement("div");
+    el.className="hnode"+(o===selected?" sel":"");
+    el.textContent=(o.parent && o.parent!==scene ? "↳ ":"")+(o.name||"Object");
+    el.onclick=()=>selectObject(o);
+    box.appendChild(el);
+  });
+}
+
+function parentSelected(){
+  if(!selected || !selected.userData.engine)return;
+  const target=objects.find(o=>o!==selected && o!==selected.parent);
+  if(!target)return;
+  target.attach(selected);
+  toastMsg("Object parented");
+  updateHierarchy();
+  saveHistory();
+}
+
+function unparentSelected(){
+  if(!selected || selected.parent===scene)return;
+  scene.attach(selected);
+  toastMsg("Object unparented");
+  updateHierarchy();
+  saveHistory();
+}
+
+function saveCameraSlot(){
+  selectedCameraSlot={
+    yaw:targetYaw,pitch:targetPitch,distance:targetDistance,
+    target:targetCameraTarget.toArray()
+  };
+  toastMsg("Camera saved");
+}
+
+function loadCameraSlot(){
+  if(!selectedCameraSlot){
+    toastMsg("No saved camera");
+    return;
+  }
+  targetYaw=selectedCameraSlot.yaw;
+  targetPitch=selectedCameraSlot.pitch;
+  targetDistance=selectedCameraSlot.distance;
+  targetCameraTarget.fromArray(selectedCameraSlot.target);
+  toastMsg("Camera loaded");
+}
+
+function addKeyframe(){
+  if(!selected)return;
+  keyframes.push({
+    time:animationTime,
+    object:selected.uuid,
+    position:selected.position.toArray(),
+    rotation:selected.rotation.toArray(),
+    scale:selected.scale.toArray()
+  });
+  keyframes.sort((a,b)=>a.time-b.time);
+  renderKeyframes();
+  toastMsg("Keyframe added");
+}
+
+function renderKeyframes(){
+  const box=$("keyframesBox");
+  if(!box)return;
+  if(!keyframes.length){
+    box.textContent="No keyframes";
+    return;
+  }
+  box.textContent=keyframes.map((k,i)=>
+    "#"+(i+1)+" "+k.time.toFixed(1)+"s"
+  ).join(" • ");
+}
+
+function clearKeyframes(){
+  keyframes=[];
+  animationTime=0;
+  renderKeyframes();
+  toastMsg("Keyframes cleared");
+}
+
+function updateKeyframeAnimation(dt){
+  if(!playing || keyframes.length<2)return;
+  animationTime+=dt;
+  const first=keyframes[0], last=keyframes[keyframes.length-1];
+  if(animationTime>last.time)animationTime=first.time;
+  const relevant=keyframes.filter(k=>k.object===selected?.uuid);
+  if(relevant.length<2 || !selected)return;
+
+  let a=relevant[0],b=relevant[relevant.length-1];
+  for(let i=0;i<relevant.length-1;i++){
+    if(animationTime>=relevant[i].time && animationTime<=relevant[i+1].time){
+      a=relevant[i];b=relevant[i+1];break;
+    }
+  }
+  const span=Math.max(.0001,b.time-a.time);
+  const t=clamp((animationTime-a.time)/span,0,1);
+  selected.position.fromArray(a.position).lerp(new THREE.Vector3().fromArray(b.position),t);
+  selected.scale.fromArray(a.scale).lerp(new THREE.Vector3().fromArray(b.scale),t);
+  const ra=new THREE.Euler().fromArray(a.rotation);
+  const rb=new THREE.Euler().fromArray(b.rotation);
+  selected.rotation.set(
+    THREE.MathUtils.lerp(ra.x,rb.x,t),
+    THREE.MathUtils.lerp(ra.y,rb.y,t),
+    THREE.MathUtils.lerp(ra.z,rb.z,t)
+  );
+}
+
+function importGLTF(file){
+  if(typeof THREE.GLTFLoader==="undefined"){
+    toastMsg("Model loader not ready");
+    return;
+  }
+  const reader=new FileReader();
+  reader.onload=()=>{
+    const loader=new THREE.GLTFLoader();
+    loader.parse(reader.result,"",gltf=>{
+      const root=gltf.scene;
+      root.name=uniqueName("Model");
+      root.userData.engine=true;
+      root.userData.type="Model";
+      root.userData.locked=false;
+      scene.add(root);
+      objects.push(root);
+      importedModels.push(root);
+      refreshSceneList();
+      selectObject(root);
+      saveHistory();
+      updateStatus();
+      toastMsg("3D model imported");
+    },()=>toastMsg("Could not load model"));
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function exportEnhancedScene(){
+  saveProject();
+}
+
+function centerSelected(){
+  if(!selected)return;
+  const box=new THREE.Box3().setFromObject(selected);
+  const c=box.getCenter(new THREE.Vector3());
+  selected.position.sub(c);
+  if(selected.position.y<0)selected.position.y=0;
+  updateInspector();
+  saveHistory();
+  toastMsg("Centered");
+}
+
+/* Hook enhanced UI after original bindUI has run. */
+function bindEnhancedUI(){
+  const menu=$("engineMenuBtn");
+  if(menu)menu.onclick=()=>$("enginePanel").classList.toggle("open");
+
+  $("materialBtn").onclick=()=>{
+    $("enginePanel").classList.add("open");
+    if(selected)toastMsg("Material controls opened");
+    else toastMsg("Select an object first");
+  };
+
+  $("textureBtn").onclick=()=>{
+    if(!selected){toastMsg("Select an object first");return;}
+    $("textureFile").click();
+  };
+
+  $("textureFile").onchange=e=>{
+    const f=e.target.files?.[0];
+    if(f)applyTexture(f);
+    e.target.value="";
+  };
+
+  $("terrainBtn").onclick=addProceduralTerrain;
+  $("skyBtn").onclick=()=>setWorld(worldMode==="day"?"night":"day");
+  $("cameraSaveBtn").onclick=saveCameraSlot;
+  $("cameraLoadBtn").onclick=loadCameraSlot;
+
+  $("modelBtn").onclick=()=>$("modelFile").click();
+  $("modelFile").onchange=e=>{
+    const f=e.target.files?.[0];
+    if(f)importGLTF(f);
+    e.target.value="";
+  };
+
+  $("keyBtn").onclick=addKeyframe;
+  $("worldDayBtn").onclick=()=>setWorld("day");
+  $("worldNightBtn").onclick=()=>setWorld("night");
+  $("fogBtn").onclick=()=>toggleFog(true);
+  $("clearFogBtn").onclick=()=>toggleFog(false);
+
+  $("addIcosaBtn").onclick=()=>addAdvancedGeometry("Icosa");
+  $("addRingBtn").onclick=()=>addAdvancedGeometry("Ring");
+  $("addTerrainBtn").onclick=addProceduralTerrain;
+  $("centerBtn").onclick=centerSelected;
+
+  $("addPointBtn").onclick=()=>addAdvancedLight("point");
+  $("addSpotBtn").onclick=()=>addAdvancedLight("spot");
+  $("addDirBtn").onclick=()=>addAdvancedLight("direction");
+  $("lightResetBtn").onclick=resetAdvancedLights;
+
+  $("parentBtn").onclick=parentSelected;
+  $("unparentBtn").onclick=unparentSelected;
+  $("recordBtn").onclick=()=>{
+    recordingKeys=!recordingKeys;
+    $("recordBtn").textContent=recordingKeys?"⏹ Recording":"⏺ Record";
+    $("recordBtn").classList.toggle("active",recordingKeys);
+  };
+  $("clearKeysBtn").onclick=clearKeyframes;
+
+  $("exportSceneBtn").onclick=exportEnhancedScene;
+  $("importSceneBtn").onclick=()=>$("loadBtn").click();
+
+  $("metalRange").oninput=e=>setMaterialProperty("metalness",e.target.value);
+  $("roughRange").oninput=e=>setMaterialProperty("roughness",e.target.value);
+  $("opacityRange").oninput=e=>setMaterialProperty("opacity",e.target.value);
+
+  updateHierarchy();
+}
+
+/* Keep hierarchy synchronized whenever selection/list changes. */
+const _oldSelectObject=selectObject;
+selectObject=function(obj){
+  _oldSelectObject(obj);
+  updateHierarchy();
+  if(obj?.material){
+    const m=Array.isArray(obj.material)?obj.material[0]:obj.material;
+    if(m){
+      $("metalRange").value=Number(m.metalness??.05);
+      $("roughRange").value=Number(m.roughness??.68);
+      $("opacityRange").value=Number(m.opacity??1);
+    }
+  }
+};
+
+const _oldAddPrimitive=addPrimitive;
+addPrimitive=function(type,pos=null,select=true){
+  const result=_oldAddPrimitive(type,pos,select);
+  updateHierarchy();
+  return result;
+};
+
+const _oldDeleteSelected=deleteSelected;
+deleteSelected=function(){
+  _oldDeleteSelected();
+  updateHierarchy();
+};
+
+const _oldDuplicateSelected=duplicateSelected;
+duplicateSelected=function(){
+  _oldDuplicateSelected();
+  updateHierarchy();
+};
+
+const _oldRestoreState=restoreState;
+restoreState=function(state){
+  _oldRestoreState(state);
+  updateHierarchy();
+};
+
+/* Improve play mode: use the editor renderer but keep the whole scene visible. */
+function startEnhancedPlay(){
+  playing=true;
+  $("playOverlay").style.display="none";
+  $("playBtn").textContent="⏹ Stop";
+  animationTime=0;
+  toastMsg("Play mode");
+}
+function stopEnhancedPlay(){
+  playing=false;
+  $("playOverlay").style.display="none";
+  $("playBtn").textContent="▶ Play";
+  toastMsg("Editor mode");
+}
+$("playBtn").onclick=function(){
+  playing ? stopEnhancedPlay() : startEnhancedPlay();
+};
+$("stopPlayBtn").onclick=stopEnhancedPlay;
+
+/* Replace animation loop with keyframe-aware loop while retaining original behavior. */
+let _lastEnhancedTime=performance.now();
+const _oldUpdatePlayAnimation=updatePlayAnimation;
+updatePlayAnimation=function(){
+  _oldUpdatePlayAnimation();
+  const now=performance.now();
+  const dt=Math.min(.1,(now-_lastEnhancedTime)/1000);
+  _lastEnhancedTime=now;
+  updateKeyframeAnimation(dt);
+};
+
+window.addEventListener("load",()=>{
+  setTimeout(bindEnhancedUI,80);
+});
+
 </script>
 </body>
 </html>
