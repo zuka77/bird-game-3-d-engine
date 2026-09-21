@@ -2308,6 +2308,7 @@ async function importGLTF(file){
           const previous = this.state && this.indices[this.state] >= 0
             ? actions[this.indices[this.state]] : null;
 
+          next.stop();
           next.reset();
           next.enabled = true;
           next.paused = false;
@@ -2333,11 +2334,46 @@ async function importGLTF(file){
       birdAnimationControllers.set(root.uuid, controller);
 
       mixer.addEventListener("finished", e => {
-        const current = controller.state;
-        if(current === "takeoff"){
-          controller.setState("flapping");
-        }else if(current === "landing"){
-          controller.setState("idle");
+        // The GLB can fire "finished" with the action object, so compare
+        // directly against the actual Takeoff/Landing actions.
+        const takeoffIndex = controller.indices.takeoff;
+        const landingIndex = controller.indices.landing;
+
+        if(takeoffIndex >= 0 && e.action === actions[takeoffIndex]){
+          // Force the flight clip to start immediately; never leave
+          // Takeoff frozen on its last frame.
+          const nextIndex = controller.indices.flapping >= 0
+            ? controller.indices.flapping
+            : controller.indices.gliding;
+
+          if(nextIndex >= 0){
+            const previous = actions[takeoffIndex];
+            const next = actions[nextIndex];
+
+            previous.stop();
+            next.reset();
+            next.enabled = true;
+            next.paused = false;
+            next.setLoop(THREE.LoopRepeat, Infinity);
+            next.clampWhenFinished = false;
+            next.play();
+
+            controller.state =
+              nextIndex === controller.indices.flapping ? "flapping" : "gliding";
+          }
+        }else if(landingIndex >= 0 && e.action === actions[landingIndex]){
+          const idleIndex = controller.indices.idle;
+          if(idleIndex >= 0){
+            actions[landingIndex].stop();
+            const idle = actions[idleIndex];
+            idle.reset();
+            idle.enabled = true;
+            idle.paused = false;
+            idle.setLoop(THREE.LoopRepeat, Infinity);
+            idle.clampWhenFinished = false;
+            idle.play();
+            controller.state = "idle";
+          }
         }
       });
 
