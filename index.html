@@ -487,6 +487,7 @@ let renderer;
 let raycaster;
 
 let objects = [];
+let glbMixers = new Map();
 let selected = null;
 let mode = "camera";
 
@@ -1265,6 +1266,8 @@ function deleteSelected(){
 }
 
 function removeObject(o){
+  glbMixers.delete(o.uuid);
+
   scene.remove(o);
 
   o.traverse(child=>{
@@ -1714,11 +1717,13 @@ let gizmoDragPointerId=null;
 /* ------------------------- ANIMATION ------------------------- */
 
 function animate(){
+  glbMixers.forEach(rec=>{
+    if(rec && rec.mixer) rec.mixer.update(1/60);
+  });
   requestAnimationFrame(animate);
 
   updateCamera();
   updateGizmo();
-  updateGLBAnimations();
 
   if(timelinePlaying){
     const now=performance.now();
@@ -1733,13 +1738,6 @@ function animate(){
   }
 
   renderer.render(scene,camera);
-}
-
-function updateGLBAnimations(){
-  const now=performance.now();
-  const dt=Math.min(0.05, Math.max(0, (now-(window._glbAnimLast||now))/1000));
-  window._glbAnimLast=now;
-  glbAnimationMixers.forEach(mixer=>mixer.update(dt));
 }
 
 function updatePlayAnimation(){
@@ -1976,7 +1974,6 @@ let keyframes=[];
 let animationTime=0;
 let recordingKeys=false;
 let importedModels=[];
-const glbAnimationMixers=new Map();
 let worldMode="day";
 
 function enhancedMaterialTarget(){
@@ -2268,6 +2265,16 @@ async function importGLTF(file){
   const loader = new Loader();
   const done = gltf => {
     const root = gltf.scene;
+    // Embedded GLB animations: use Three.js AnimationMixer.
+    // Everything else in the original importer remains unchanged.
+    if(gltf.animations && gltf.animations.length){
+      const mixer = new THREE.AnimationMixer(root);
+      const actions = gltf.animations.map(clip => mixer.clipAction(clip));
+      actions[0].reset().setLoop(THREE.LoopRepeat, Infinity).play();
+      glbMixers.set(root.uuid, {mixer, actions});
+      root.userData.glbAnimations = gltf.animations;
+    }
+
     root.name = uniqueName("Model");
     root.userData.engine = true;
     root.userData.type = "Model";
@@ -2275,15 +2282,6 @@ async function importGLTF(file){
     scene.add(root);
     objects.push(root);
     importedModels.push(root);
-
-    // ONLY added behavior: play animation clips embedded in the GLB.
-    if(Array.isArray(gltf.animations) && gltf.animations.length){
-      const mixer=new THREE.AnimationMixer(root);
-      glbAnimationMixers.set(root.uuid,mixer);
-      const action=mixer.clipAction(gltf.animations[0]);
-      action.reset().setLoop(THREE.LoopRepeat,Infinity).play();
-    }
-
     refreshSceneList();
     selectObject(root);
     saveHistory();
