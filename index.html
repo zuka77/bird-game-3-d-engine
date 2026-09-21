@@ -102,6 +102,12 @@ canvas{display:block;width:100%;height:100%;touch-action:none}
   padding:8px 9px;border-radius:9px;background:#10151d;
   border:1px solid var(--line);font-size:10px;color:var(--muted);line-height:1.55
 }
+.modelAnimBox{margin-top:9px;padding:8px;border-radius:9px;background:#10151d;border:1px solid var(--line)}
+.modelAnimTitle{font-size:10px;font-weight:900;color:#b9c3d0;margin-bottom:6px}
+.modelAnimRow{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-top:6px}
+.modelAnimRow button{font-size:9px;padding:8px 6px}
+.modelAnimSelect{font-size:9px;padding:8px}
+.modelAnimMeta{font-size:8px;color:#8e99aa;margin-top:6px;line-height:1.4}
 .actionRow{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:9px}
 #emptyInspector{color:var(--muted);font-size:12px}
 .checkboxRow{display:flex;align-items:center;gap:7px;font-size:11px;color:var(--muted);margin-top:9px}
@@ -847,10 +853,12 @@ function updateInspector(){
       <button id="focusObject">🎯 Focus</button>
       <button id="duplicateObject">📋 Duplicate</button>
     </div>
+    ${renderModelAnimationControls(o)}
     <button id="deleteObject" class="danger" style="width:100%;margin-top:6px">🗑 Delete Object</button>
   `;
 
   bindInspector();
+  bindModelAnimationControls(o);
 }
 
 function bindInspector(){
@@ -1265,6 +1273,15 @@ function deleteSelected(){
 }
 
 function removeObject(o){
+  if(modelMixers.has(o.uuid)){
+    const mixer=modelMixers.get(o.uuid);
+    mixer.stopAllAction();
+    mixer.uncacheRoot(o);
+    modelMixers.delete(o.uuid);
+    modelAnimationClips.delete(o.uuid);
+    modelAnimationActions.delete(o.uuid);
+    activeModelAnimation.delete(o.uuid);
+  }
   scene.remove(o);
 
   o.traverse(child=>{
@@ -1731,6 +1748,13 @@ function animate(){
     updatePlayAnimation();
   }
 
+  if(modelMixers.size){
+    const now=performance.now();
+    const dt=Math.min(.05,(now-(window._birdModelAnimLast||now))/1000);
+    window._birdModelAnimLast=now;
+    modelMixers.forEach(mixer=>mixer.update(dt));
+  }
+
   renderer.render(scene,camera);
 }
 
@@ -1968,6 +1992,10 @@ let keyframes=[];
 let animationTime=0;
 let recordingKeys=false;
 let importedModels=[];
+let modelMixers=new Map();
+let modelAnimationClips=new Map();
+let modelAnimationActions=new Map();
+let activeModelAnimation=new Map();
 let worldMode="day";
 
 function enhancedMaterialTarget(){
@@ -2249,6 +2277,72 @@ function updateKeyframeAnimation(dt){
   );
 }
 
+function stopModelAnimation(root){
+  const actions=modelAnimationActions.get(root?.uuid);
+  if(actions) actions.forEach(a=>a.stop());
+  if(root) activeModelAnimation.delete(root.uuid);
+}
+
+function playModelAnimation(root,index=0){
+  if(!root)return;
+  const actions=modelAnimationActions.get(root.uuid);
+  const clips=modelAnimationClips.get(root.uuid)||[];
+  if(!actions||!clips.length)return;
+  const safeIndex=Math.max(0,Math.min(Number(index)||0,clips.length-1));
+  actions.forEach((a,i)=>{ if(i!==safeIndex)a.stop(); });
+  const action=actions[safeIndex];
+  action.reset();
+  action.setLoop(THREE.LoopRepeat,Infinity);
+  action.clampWhenFinished=false;
+  action.enabled=true;
+  action.play();
+  activeModelAnimation.set(root.uuid,safeIndex);
+}
+
+function setupModelAnimations(root,clips){
+  const cleanClips=Array.isArray(clips)?clips.filter(c=>c && c.tracks && c.tracks.length):[];
+  if(!cleanClips.length){
+    root.userData.hasAnimations=false;
+    return;
+  }
+  const mixer=new THREE.AnimationMixer(root);
+  const actions=cleanClips.map(c=>mixer.clipAction(c));
+  modelMixers.set(root.uuid,mixer);
+  modelAnimationClips.set(root.uuid,cleanClips);
+  modelAnimationActions.set(root.uuid,actions);
+  root.userData.hasAnimations=true;
+  root.userData.animationNames=cleanClips.map((c,i)=>c.name||('Animation '+(i+1)));
+  // Automatically play the first animation so animated GLBs are not imported frozen.
+  playModelAnimation(root,0);
+}
+
+function renderModelAnimationControls(root){
+  const clips=modelAnimationClips.get(root?.uuid)||[];
+  if(!root || !clips.length)return '';
+  const active=activeModelAnimation.get(root.uuid);
+  const options=clips.map((c,i)=>`<option value="${i}" ${i===active?'selected':''}>${escapeHtml(c.name||('Animation '+(i+1)))}</option>`).join('');
+  return `
+    <div class="modelAnimBox">
+      <div class="modelAnimTitle">🎬 MODEL ANIMATIONS</div>
+      <select id="modelAnimSelect" class="modelAnimSelect">${options}</select>
+      <div class="modelAnimRow">
+        <button id="modelAnimPlay">▶ Play</button>
+        <button id="modelAnimStop">⏹ Stop</button>
+      </div>
+      <div class="modelAnimMeta">${clips.length} embedded animation${clips.length===1?'':'s'} • GLB animation data detected</div>
+    </div>`;
+}
+
+function bindModelAnimationControls(root){
+  if(!root)return;
+  const select=$('modelAnimSelect');
+  const play=$('modelAnimPlay');
+  const stop=$('modelAnimStop');
+  if(select)select.onchange=()=>playModelAnimation(root,Number(select.value));
+  if(play)play.onclick=()=>playModelAnimation(root,Number(select?.value||0));
+  if(stop)stop.onclick=()=>{stopModelAnimation(root);updateInspector();};
+}
+
 async function importGLTF(file){
   const Loader = window.GLTFLoaderClass || await gltfLoaderReady;
   if(!Loader){
@@ -2266,11 +2360,13 @@ async function importGLTF(file){
     scene.add(root);
     objects.push(root);
     importedModels.push(root);
+    setupModelAnimations(root,gltf.animations||[]);
     refreshSceneList();
     selectObject(root);
     saveHistory();
     updateStatus();
-    toastMsg("3D model imported");
+    const count=(gltf.animations||[]).length;
+    toastMsg(count ? `3D model imported • ${count} animation${count===1?'':'s'}` : "3D model imported • no embedded animations");
   };
   const failed = err => {
     console.error("3D model import failed:", err);
