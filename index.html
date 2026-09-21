@@ -399,8 +399,12 @@ canvas{max-width:100%;max-height:100%;}
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/loaders/GLTFLoader.js"></script>
 <script>
+// GLTFLoader is loaded as an ES module because the old examples/js loader was removed in modern Three.js.
+let GLTFLoaderClass = null;
+const gltfLoaderReady = import("https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/loaders/GLTFLoader.js")
+  .then(m => { GLTFLoaderClass = m.GLTFLoader; return GLTFLoaderClass; })
+  .catch(err => { console.error("GLTFLoader failed:", err); return null; });
 "use strict";
 
 /* ============================================================
@@ -1994,31 +1998,45 @@ function updateKeyframeAnimation(dt){
   );
 }
 
-function importGLTF(file){
-  if(typeof THREE.GLTFLoader==="undefined"){
-    toastMsg("Model loader not ready");
+async function importGLTF(file){
+  const Loader = GLTFLoaderClass || await gltfLoaderReady;
+  if(!Loader){
+    toastMsg("3D model loader failed to load");
     return;
   }
-  const reader=new FileReader();
-  reader.onload=()=>{
-    const loader=new THREE.GLTFLoader();
-    loader.parse(reader.result,"",gltf=>{
-      const root=gltf.scene;
-      root.name=uniqueName("Model");
-      root.userData.engine=true;
-      root.userData.type="Model";
-      root.userData.locked=false;
-      scene.add(root);
-      objects.push(root);
-      importedModels.push(root);
-      refreshSceneList();
-      selectObject(root);
-      saveHistory();
-      updateStatus();
-      toastMsg("3D model imported");
-    },()=>toastMsg("Could not load model"));
+
+  const loader = new Loader();
+  const done = gltf => {
+    const root = gltf.scene;
+    root.name = uniqueName("Model");
+    root.userData.engine = true;
+    root.userData.type = "Model";
+    root.userData.locked = false;
+    scene.add(root);
+    objects.push(root);
+    importedModels.push(root);
+    refreshSceneList();
+    selectObject(root);
+    saveHistory();
+    updateStatus();
+    toastMsg("3D model imported");
   };
-  reader.readAsArrayBuffer(file);
+  const failed = err => {
+    console.error("3D model import failed:", err);
+    toastMsg("Could not load 3D model");
+  };
+
+  // GLB can be parsed directly. Embedded GLTF is also supported.
+  if(file.name.toLowerCase().endsWith(".glb")){
+    const reader = new FileReader();
+    reader.onload = () => loader.parse(reader.result, "", done, failed);
+    reader.onerror = failed;
+    reader.readAsArrayBuffer(file);
+  }else{
+    const url = URL.createObjectURL(file);
+    loader.load(url, done, undefined, failed);
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+  }
 }
 
 function exportEnhancedScene(){
