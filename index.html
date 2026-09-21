@@ -399,12 +399,26 @@ canvas{max-width:100%;max-height:100%;}
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+window.GLTFLoaderClass = GLTFLoader;
+window.dispatchEvent(new Event("gltfloaderready"));
+</script>
 <script>
-// GLTFLoader is loaded as an ES module because the old examples/js loader was removed in modern Three.js.
-let GLTFLoaderClass = null;
-const gltfLoaderReady = import("https://esm.sh/three@0.160.0/examples/jsm/loaders/GLTFLoader.js?bundle")
-  .then(m => { GLTFLoaderClass = m.GLTFLoader; return GLTFLoaderClass; })
-  .catch(err => { console.error("GLTFLoader failed:", err); return null; });
+// GLTFLoader uses the official Three.js ES-module build with an import map.
+window.GLTFLoaderClass = null;
+let gltfLoaderReady = new Promise(resolve=>{
+  if(window.GLTFLoaderClass) resolve(window.GLTFLoaderClass);
+  else window.addEventListener("gltfloaderready",()=>resolve(window.GLTFLoaderClass),{once:true});
+});
 "use strict";
 
 /* ============================================================
@@ -1999,9 +2013,9 @@ function updateKeyframeAnimation(dt){
 }
 
 async function importGLTF(file){
-  const Loader = GLTFLoaderClass || await gltfLoaderReady;
+  const Loader = window.GLTFLoaderClass || await gltfLoaderReady;
   if(!Loader){
-    toastMsg("3D model loader failed to load");
+    toastMsg("3D model loader failed to initialize");
     return;
   }
 
