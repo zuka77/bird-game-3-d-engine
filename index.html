@@ -487,7 +487,7 @@ let renderer;
 let raycaster;
 
 let objects = [];
-let glbMixers = new Map();
+let birdAnimationControllers = new Map();
 let selected = null;
 let mode = "camera";
 
@@ -1266,7 +1266,7 @@ function deleteSelected(){
 }
 
 function removeObject(o){
-  glbMixers.delete(o.uuid);
+  birdAnimationControllers.delete(o.uuid);
 
   scene.remove(o);
 
@@ -1717,9 +1717,6 @@ let gizmoDragPointerId=null;
 /* ------------------------- ANIMATION ------------------------- */
 
 function animate(){
-  glbMixers.forEach(rec=>{
-    if(rec && rec.mixer) rec.mixer.update(0.016);
-  });
   requestAnimationFrame(animate);
 
   updateCamera();
@@ -1736,6 +1733,12 @@ function animate(){
   } else if(playing){
     updatePlayAnimation();
   }
+
+  birdAnimationControllers.forEach(controller=>{
+    if(controller && controller.mixer){
+      controller.mixer.update(1/60);
+    }
+  });
 
   renderer.render(scene,camera);
 }
@@ -2265,94 +2268,87 @@ async function importGLTF(file){
   const loader = new Loader();
   const done = gltf => {
     const root = gltf.scene;
-    // Embedded GLB animations: use Three.js AnimationMixer.
-    // Everything else in the original importer remains unchanged.
-    if(gltf.animations && gltf.animations.length){
+    // GLB bird animation controller. This only handles the embedded clips.
+    if(Array.isArray(gltf.animations) && gltf.animations.length){
       const mixer = new THREE.AnimationMixer(root);
       const clips = gltf.animations;
-      const actions = clips.map(clip => mixer.clipAction(clip));
 
-      const findClip = (words) => {
-        const normalized = s => String(s || "")
-          .toLowerCase()
-          .replace(/[|_\-]+/g, " ")
-          .replace(/\s+/g, " ")
-          .trim();
+      const normalize = s => String(s || "").toLowerCase()
+        .replace(/[|_\-]+/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
 
-        const list = words.map(normalized);
-        let i = clips.findIndex(c => {
-          const n = normalized(c.name);
-          return list.some(w => n === w || n.endsWith(" " + w) || n.includes(w));
+      const clipIndex = (...names) => {
+        const wanted = names.map(normalize);
+        return clips.findIndex(c => {
+          const n = normalize(c.name);
+          return wanted.some(w => n === w || n.endsWith(" " + w));
         });
+      };
 
-        // Explicit aliases for the uploaded Pigeon GLB.
-        if(i < 0){
-          i = clips.findIndex(c => {
-            const n = normalized(c.name);
-            if(words.includes("flap") || words.includes("fly") || words.includes("flight"))
-              return n.includes("flapping");
-            if(words.includes("glide") || words.includes("soar"))
-              return n.includes("gliding");
-            if(words.includes("landing") || words.includes("land"))
-              return n.includes("landing");
-            if(words.includes("idle") || words.includes("ground"))
-              return n.includes("standing idle") || n.includes("idle");
-            if(words.includes("takeoff") || words.includes("take off"))
-              return n.includes("takeoff");
-            return false;
-          });
+      const indices = {
+        flapping: clipIndex("birdrig flapping", "flapping"),
+        gliding: clipIndex("birdrig gliding", "gliding"),
+        landing: clipIndex("birdrig landing", "landing"),
+        idle: clipIndex("birdrig standing idle", "standing idle", "idle"),
+        takeoff: clipIndex("birdrig takeoff", "takeoff")
+      };
+
+      const actions = clips.map(c => mixer.clipAction(c));
+      const controller = {
+        root, mixer, clips, actions, indices,
+        state: null,
+        speed: 1,
+        setState(state){
+          const i = this.indices[state];
+          if(i == null || i < 0) return false;
+          if(this.state === state && actions[i].isRunning()) return true;
+
+          const next = actions[i];
+          const previous = this.state && this.indices[this.state] >= 0
+            ? actions[this.indices[this.state]] : null;
+
+          next.reset();
+          next.enabled = true;
+          next.paused = false;
+
+          const oneShot = state === "takeoff" || state === "landing";
+          next.setLoop(oneShot ? THREE.LoopOnce : THREE.LoopRepeat,
+                        oneShot ? 1 : Infinity);
+          next.clampWhenFinished = oneShot;
+
+          if(previous && previous !== next){
+            next.crossFadeFrom(previous, 0.18, true);
+          }else{
+            next.play();
+          }
+
+          this.state = state;
+          return true;
         }
-        return i >= 0 ? i : -1;
       };
 
-      const anim = {
-        mixer,
-        clips,
-        actions,
-        current: -1,
-        names: clips.map(c => c.name),
-        takeoff: findClip(["takeoff","take_off","take off"]),
-        fly: findClip(["fly","flap","flight"]),
-        glide: findClip(["glide","soar"]),
-        landing: findClip(["landing","land"]),
-        idle: findClip(["idle","ground"])
-      };
-
-      const playState = (state, loop=true) => {
-        const i = anim[state];
-        if(i == null || i < 0) return false;
-        if(anim.current === i && actions[i].isRunning()) return true;
-
-        actions.forEach(a => a.stop());
-        const a = actions[i];
-        a.reset();
-        a.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, loop ? Infinity : 1);
-        a.clampWhenFinished = !loop;
-        a.play();
-        anim.current = i;
-        return true;
-      };
-
-      // Public controls for the game code:
-      root.userData.setBirdAnimation = (state) => playState(state, state !== "takeoff" && state !== "landing");
-      root.userData.birdAnimation = anim;
-
-      // Start naturally: Takeoff once, then Flapping. Glide is available
-      // as a separate state for the game movement system.
-      if(!playState("takeoff", false))
-        if(!playState("fly", true))
-          if(!playState("glide", true))
-            playState("idle", true);
+      // Expose only the animation controller; no UI/design changes.
+      root.userData.birdAnimation = controller;
+      birdAnimationControllers.set(root.uuid, controller);
 
       mixer.addEventListener("finished", e => {
-        if(e.action === actions[anim.takeoff])
-          playState("fly", true) || playState("glide", true);
-        else if(e.action === actions[anim.landing])
-          playState("idle", true);
+        const current = controller.state;
+        if(current === "takeoff"){
+          controller.setState("flapping");
+        }else if(current === "landing"){
+          controller.setState("idle");
+        }
       });
 
-      glbMixers.set(root.uuid, anim);
-      root.userData.glbAnimations = clips;
+      // Start the bird correctly: takeoff once, then continuous flight.
+      if(!controller.setState("takeoff")){
+        if(!controller.setState("flapping")){
+          if(!controller.setState("gliding")){
+            controller.setState("idle");
+          }
+        }
+      }
     }
 
     root.name = uniqueName("Model");
