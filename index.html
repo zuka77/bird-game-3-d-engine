@@ -236,6 +236,25 @@ canvas{max-width:100%;max-height:100%;}
 #timelineBox input[type=range]{padding:0;height:20px}
 #timelineTime{font-size:9px;color:#b9c3d0;text-align:center;margin:3px 0}
 .gizmoBtnOn{background:#35d477!important;color:#07130c!important}
+/* ==================== ASSET MANAGER ==================== */
+#assetManagerPanel{position:absolute;right:10px;top:55px;z-index:35;width:min(320px,calc(100% - 16px));max-height:72%;overflow:auto;background:#121923f7;border:1px solid #344052;border-radius:14px;padding:11px;display:none;box-shadow:0 15px 45px #0008;backdrop-filter:blur(10px)}
+#assetManagerPanel.open{display:block}
+.amHead{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.amHead button{padding:6px 9px;font-size:11px}
+.amTabs{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:8px 0}
+.amTabs button.active{background:var(--green);color:#07130c}
+.amActions{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px}
+.amActions button{font-size:10px}
+.amHint{font-size:9px;color:#8e99aa;line-height:1.45;margin-bottom:8px}
+.assetList{display:flex;flex-direction:column;gap:6px}
+.assetItem{display:flex;align-items:center;justify-content:space-between;gap:7px;padding:8px;border-radius:9px;background:#1b2330;border:1px solid #2b3544}
+.assetMeta{min-width:0;flex:1}
+.assetName{font-size:10px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.assetType{font-size:8px;color:#8e99aa;margin-top:2px}
+.assetBtns{display:flex;gap:4px;flex:0 0 auto}
+.assetBtns button{font-size:9px;padding:7px 8px}
+.assetEmpty{font-size:10px;color:#8e99aa;padding:10px;text-align:center;border:1px dashed #303949;border-radius:9px}
+@media(max-width:650px){#assetManagerPanel{top:48px;right:6px;width:min(245px,calc(100% - 12px));max-height:62%;padding:9px}#assetManagerBtn{font-size:9px;padding:8px 9px}}
 </style>
 </head>
 
@@ -311,6 +330,15 @@ canvas{max-width:100%;max-height:100%;}
   <button id="cameraLoadBtn">📷 Load Cam</button>
   <button id="modelBtn">📦 3D Model</button>
   <button id="keyBtn">🎬 Keyframe</button>
+  <button id="assetManagerBtn">🗂 Assets</button>
+</div>
+
+<div id="assetManagerPanel" aria-hidden="true">
+  <div class="amHead"><div class="epTitle">🗂 ASSET MANAGER</div><button id="assetCloseBtn">✕</button></div>
+  <div class="amTabs"><button id="amModelsTab" class="active">Models</button><button id="amTexturesTab">Textures</button></div>
+  <div class="amActions"><button id="amAddBtn">＋ Add Asset</button><button id="amRefreshBtn">↻ Refresh</button></div>
+  <div id="amHint" class="amHint">Assets are stored on this device so they can be reused after reopening the app.</div>
+  <div id="assetList" class="assetList"></div>
 </div>
 
 <div id="enginePanel">
@@ -2800,6 +2828,60 @@ window.addEventListener("load",()=>{
   window.addEventListener('load',()=>setTimeout(addProSection,120));
 })();
 
+
+/* ====================== ASSET MANAGER MODULE ====================== */
+(function(){
+  "use strict";
+  const DB_NAME="bird_engine_assets_v1", STORE="assets";
+  const $a=id=>document.getElementById(id);
+  let amType="model", amDB=null;
+  const amToast=msg=>{try{toastMsg(msg)}catch{}};
+  function openDB(){
+    if(amDB)return Promise.resolve(amDB);
+    return new Promise((resolve,reject)=>{
+      if(!window.indexedDB){reject(new Error("IndexedDB unavailable"));return;}
+      const req=indexedDB.open(DB_NAME,1);
+      req.onupgradeneeded=e=>{const db=e.target.result;if(!db.objectStoreNames.contains(STORE)){const st=db.createObjectStore(STORE,{keyPath:"id",autoIncrement:true});st.createIndex("type","type",{unique:false});}};
+      req.onsuccess=e=>{amDB=e.target.result;resolve(amDB)};req.onerror=()=>reject(req.error||new Error("DB error"));
+    });
+  }
+  function dbAll(type){return openDB().then(db=>new Promise((resolve,reject)=>{const req=db.transaction(STORE,"readonly").objectStore(STORE).openCursor(),out=[];req.onsuccess=e=>{const c=e.target.result;if(!c){resolve(out.filter(x=>x.type===type).sort((a,b)=>a.created-b.created));return;}out.push(c.value);c.continue()};req.onerror=()=>reject(req.error)}))}
+  function dbPut(asset){return openDB().then(db=>new Promise((resolve,reject)=>{const req=db.transaction(STORE,"readwrite").objectStore(STORE).add(asset);req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error)}))}
+  function dbDelete(id){return openDB().then(db=>new Promise((resolve,reject)=>{const req=db.transaction(STORE,"readwrite").objectStore(STORE).delete(Number(id));req.onsuccess=()=>resolve();req.onerror=()=>reject(req.error)}))}
+  function formatBytes(n){if(n<1024)return n+" B";if(n<1048576)return(n/1024).toFixed(1)+" KB";return(n/1048576).toFixed(1)+" MB"}
+  function renderAssets(){
+    const list=$a("assetList");if(!list)return;list.innerHTML='<div class="assetEmpty">Loading…</div>';
+    dbAll(amType).then(items=>{
+      list.innerHTML="";
+      if(!items.length){list.innerHTML='<div class="assetEmpty">No '+(amType==="model"?"models":"textures")+' saved yet.</div>';return;}
+      items.forEach(item=>{
+        const row=document.createElement("div");row.className="assetItem";
+        const meta=document.createElement("div");meta.className="assetMeta";
+        const name=document.createElement("div");name.className="assetName";name.textContent=item.name;
+        const type=document.createElement("div");type.className="assetType";type.textContent=(amType==="model"?"3D MODEL":"TEXTURE")+" • "+formatBytes(item.size||0);
+        meta.append(name,type);const btns=document.createElement("div");btns.className="assetBtns";
+        const use=document.createElement("button");use.textContent=amType==="model"?"Add":"Apply";
+        const del=document.createElement("button");del.textContent="🗑";
+        use.onclick=()=>useAsset(item);del.onclick=async()=>{if(confirm("Delete this asset from the library?")){await dbDelete(item.id);renderAssets();amToast("Asset deleted")}};
+        btns.append(use,del);row.append(meta,btns);list.append(row);
+      });
+    }).catch(()=>{list.innerHTML='<div class="assetEmpty">Asset storage is unavailable.</div>'});
+  }
+  async function useAsset(item){
+    try{const blob=new Blob([item.data],{type:item.mime||"application/octet-stream"});const file=new File([blob],item.name,{type:item.mime||"application/octet-stream"});
+      if(item.type==="model")await importGLTF(file);else{if(!selected){amToast("Select an object first");return}applyTexture(file)}
+    }catch(e){console.error(e);amToast("Could not use asset")};
+  }
+  function addAsset(){
+    const input=document.createElement("input");input.type="file";input.accept=amType==="model"?".glb,.gltf,model/gltf-binary,model/gltf+json":"image/*";
+    input.onchange=async()=>{const file=input.files?.[0];if(!file)return;try{const n=file.name.toLowerCase();const type=amType==="model"?(n.endsWith(".glb")||n.endsWith(".gltf")?"model":null):(file.type.startsWith("image/")?"texture":null);if(type!==amType){amToast("Choose a valid "+(amType==="model"?"GLB/GLTF model":"image"));return}const data=await file.arrayBuffer();await dbPut({name:file.name,type,mime:file.type||"application/octet-stream",size:file.size,created:Date.now(),data});renderAssets();amToast("Asset saved to library")}catch(e){console.error(e);amToast("Could not save asset")}};
+    input.click();
+  }
+  function setTab(type){amType=type;$a("amModelsTab")?.classList.toggle("active",type==="model");$a("amTexturesTab")?.classList.toggle("active",type==="texture");$a("amHint").textContent=type==="model"?"Saved GLB/GLTF models stay on this device and can be added again anytime.":"Saved images stay on this device and can be applied to the selected object anytime.";renderAssets()}
+  function open(){const p=$a("assetManagerPanel");if(!p)return;p.classList.add("open");p.setAttribute("aria-hidden","false");renderAssets()}
+  function close(){const p=$a("assetManagerPanel");if(!p)return;p.classList.remove("open");p.setAttribute("aria-hidden","true")}
+  window.addEventListener("load",()=>setTimeout(()=>{$a("assetManagerBtn")?.addEventListener("click",()=>{const p=$a("assetManagerPanel");p?.classList.contains("open")?close():open()});$a("assetCloseBtn")?.addEventListener("click",close);$a("amModelsTab")?.addEventListener("click",()=>setTab("model"));$a("amTexturesTab")?.addEventListener("click",()=>setTab("texture"));$a("amAddBtn")?.addEventListener("click",addAsset);$a("amRefreshBtn")?.addEventListener("click",renderAssets);openDB().catch(()=>{})},180));
+})();
 </script>
 </body>
 </html>
